@@ -81,8 +81,3 @@ state_schema:
 # github_path will be added if it does not exist. It is the URL of the repo.
 
 
-github_path: 'https://github.com/Lord-Raven/last-dalliance-of-elves-and-men'
-
-
-extension_id: 'last-dalliance-of-elves-and-men-cfb35bf593d2'
-
