@@ -2,13 +2,13 @@
 #   in which case these values can be managed in the UI.
 
 # The name of the stage.
-# project_name: "Stage Template"
+project_name: "Last Dalliance of Elves and Men"
 
 # A short tagline to show in search.
-# tagline: "A base template for all stages."
+tagline: "A tower-defense thing."
 
 # 'PUBLIC', 'PRIVATE', or 'UNLISTED'.
-# visibility: 'PUBLIC'
+visibility: 'PRIVATE'
 
 # 'ADJACENT' | 'NONE' | 'COVER' | 'FULLSCREEN'
 # 'ADJACENT' is default. The frame will display on the side of the
@@ -18,14 +18,16 @@
 #   but leave the text input box.
 # 'FULLSCREEN' will make nothing below the header bar
 #   show except for your stage.
-# position: 'ADJACENT'
+position: 'FULLSCREEN'
 
 # Self-explanatory.
-# tags:
-#  - 'Stage'
-#  - 'Admin'
-#  - 'Template'
-#  - 'Base'
+tags:
+ - 'Stage'
+ - 'Game'
+
+creator_notes: "
+<div>Bring it.</div>
+"
 
 # The schema of any user-supplied config.
 # If your stage requires a configuration but has no
@@ -33,9 +35,12 @@
 config_schema:
   type: object
   properties:
-    health:
-      type: integer
-      default: 100
+    beta_mode:
+      title: Beta Mode
+      description: Enable experimental beta features.
+      type: string
+      default: "False"
+      enum: ["True", "False"]
 
 # The schema of the state that you store.
 # This isn't needed even if you do store state,
