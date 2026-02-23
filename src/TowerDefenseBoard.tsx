@@ -10,6 +10,7 @@ type Card = {
     cost: number;
     attack: number;
     health: number;
+    shield: number;
     portrait: string;
 };
 
@@ -17,6 +18,9 @@ type Enemy = {
     id: string;
     sprite: Sprite;
     speed: number;
+    attack: number;
+    attackRange: number;
+    cooldown: number;
     hp: number;
     maxHp: number;
     healthBarBg: Graphics;
@@ -29,6 +33,12 @@ type Defender = {
     sprite: Sprite;
     hp: number;
     maxHp: number;
+    shield: number;
+    maxShield: number;
+    shieldRechargeTimer: number;
+    shieldCircle: Graphics | null;
+    shieldBarBg: Graphics | null;
+    shieldBar: Graphics | null;
     cooldown: number;
     rangeCircle: Graphics | null;
 };
@@ -36,6 +46,8 @@ type Defender = {
 type Effect = {
     graphic: Graphics;
     life: number;
+    maxLife: number;
+    update?: (progress: number, graphic: Graphics) => void;
 };
 
 type BoardApi = {
@@ -44,15 +56,15 @@ type BoardApi = {
 };
 
 const CARD_POOL: ReadonlyArray<Omit<Card, 'id'>> = [
-    {name: 'Aelion Sentinel', type: 'melee', cost: 3, attack: 12, health: 90, portrait: '/placeholder/enemy-placeholder.svg'},
-    {name: 'Thornblade Guard', type: 'melee', cost: 4, attack: 15, health: 105, portrait: '/placeholder/enemy-placeholder.svg'},
-    {name: 'Moonwatch Archer', type: 'ranged', cost: 2, attack: 10, health: 64, portrait: '/placeholder/enemy-placeholder.svg'},
-    {name: 'Galeleaf Ranger', type: 'ranged', cost: 3, attack: 13, health: 72, portrait: '/placeholder/enemy-placeholder.svg'},
-    {name: 'Starbloom Mage', type: 'magic', cost: 4, attack: 16, health: 58, portrait: '/placeholder/enemy-placeholder.svg'},
-    {name: 'Runesong Mystic', type: 'magic', cost: 5, attack: 20, health: 62, portrait: '/placeholder/enemy-placeholder.svg'},
-    {name: 'Sunbark Duelist', type: 'melee', cost: 2, attack: 9, health: 78, portrait: '/placeholder/enemy-placeholder.svg'},
-    {name: 'Whisperwind Scout', type: 'ranged', cost: 1, attack: 7, health: 54, portrait: '/placeholder/enemy-placeholder.svg'},
-    {name: 'Silver Veil Adept', type: 'magic', cost: 3, attack: 12, health: 52, portrait: '/placeholder/enemy-placeholder.svg'},
+    {name: 'Aelion Sentinel', type: 'melee', cost: 3, attack: 12, health: 90, shield: 44, portrait: '/placeholder/enemy-placeholder.svg'},
+    {name: 'Thornblade Guard', type: 'melee', cost: 4, attack: 15, health: 105, shield: 54, portrait: '/placeholder/enemy-placeholder.svg'},
+    {name: 'Moonwatch Archer', type: 'ranged', cost: 2, attack: 10, health: 64, shield: 0, portrait: '/placeholder/enemy-placeholder.svg'},
+    {name: 'Galeleaf Ranger', type: 'ranged', cost: 3, attack: 13, health: 72, shield: 0, portrait: '/placeholder/enemy-placeholder.svg'},
+    {name: 'Starbloom Mage', type: 'magic', cost: 4, attack: 16, health: 58, shield: 0, portrait: '/placeholder/enemy-placeholder.svg'},
+    {name: 'Runesong Mystic', type: 'magic', cost: 5, attack: 20, health: 62, shield: 0, portrait: '/placeholder/enemy-placeholder.svg'},
+    {name: 'Sunbark Duelist', type: 'melee', cost: 2, attack: 9, health: 78, shield: 36, portrait: '/placeholder/enemy-placeholder.svg'},
+    {name: 'Whisperwind Scout', type: 'ranged', cost: 1, attack: 7, health: 54, shield: 0, portrait: '/placeholder/enemy-placeholder.svg'},
+    {name: 'Silver Veil Adept', type: 'magic', cost: 3, attack: 12, health: 52, shield: 0, portrait: '/placeholder/enemy-placeholder.svg'},
 ];
 
 const TYPE_TINT: Record<ElfType, number> = {
@@ -172,28 +184,115 @@ export const TowerDefenseBoard = (): ReactElement => {
 
             const createArrowEffect = (startX: number, startY: number, endX: number, endY: number): void => {
                 const arrow = new Graphics();
-                arrow.moveTo(startX, startY);
-                arrow.lineTo(endX, endY);
-                arrow.stroke({width: 3, color: 0xf8fafc, alpha: 0.95});
+                const life = 16;
                 effectLayer.addChild(arrow);
-                effects.push({graphic: arrow, life: 10});
+                effects.push({
+                    graphic: arrow,
+                    life,
+                    maxLife: life,
+                    update: (progress, graphic) => {
+                        const clamped = Math.max(0, Math.min(1, progress));
+                        const headX = startX + (endX - startX) * clamped;
+                        const headY = startY + (endY - startY) * clamped;
+                        const tailRatio = Math.max(0, clamped - 0.16);
+                        const tailX = startX + (endX - startX) * tailRatio;
+                        const tailY = startY + (endY - startY) * tailRatio;
+                        const angle = Math.atan2(endY - startY, endX - startX);
+
+                        graphic.clear();
+                        graphic.moveTo(tailX, tailY);
+                        graphic.lineTo(headX, headY);
+                        graphic.stroke({width: 2.6, color: 0xf8fafc, alpha: 0.96});
+
+                        const wing = 6;
+                        const back = 9;
+                        graphic.moveTo(headX, headY);
+                        graphic.lineTo(headX - Math.cos(angle - 0.35) * back, headY - Math.sin(angle - 0.35) * back);
+                        graphic.lineTo(headX - Math.cos(angle) * wing, headY - Math.sin(angle) * wing);
+                        graphic.lineTo(headX - Math.cos(angle + 0.35) * back, headY - Math.sin(angle + 0.35) * back);
+                        graphic.closePath();
+                        graphic.fill({color: 0xe2e8f0, alpha: 0.95});
+                    },
+                });
             };
 
             const createMeleeEffect = (x: number, y: number, radius: number): void => {
                 const slash = new Graphics();
-                slash.circle(x, y, radius);
-                slash.stroke({width: 3, color: 0x86efac, alpha: 0.8});
+                const life = 12;
                 effectLayer.addChild(slash);
-                effects.push({graphic: slash, life: 8});
+                effects.push({
+                    graphic: slash,
+                    life,
+                    maxLife: life,
+                    update: (progress, graphic) => {
+                        const sweep = progress * Math.PI * 1.75;
+                        const slashRadius = radius * 0.62;
+                        graphic.clear();
+
+                        graphic.arc(x, y, slashRadius, -0.9 + sweep, -0.18 + sweep);
+                        graphic.stroke({width: 4, color: 0x86efac, alpha: 0.95});
+
+                        graphic.arc(x, y, slashRadius * 0.72, 0.8 + sweep, 1.4 + sweep);
+                        graphic.stroke({width: 3, color: 0xbbf7d0, alpha: 0.88});
+
+                        const flashRadius = 14 + progress * 22;
+                        graphic.circle(x, y, flashRadius);
+                        graphic.fill({color: 0xdcfce7, alpha: 0.22 * (1 - progress)});
+                    },
+                });
             };
 
-            const createMagicBlast = (x: number, y: number, radius: number): void => {
-                const blast = new Graphics();
-                blast.circle(x, y, radius);
-                blast.fill({color: 0xc084fc, alpha: 0.22});
-                blast.stroke({width: 3, color: 0xe9d5ff, alpha: 0.92});
-                effectLayer.addChild(blast);
-                effects.push({graphic: blast, life: 16});
+            const createMagicBoltEffect = (points: Array<{x: number; y: number}>): void => {
+                if (points.length < 2) {
+                    return;
+                }
+
+                const bolt = new Graphics();
+                const life = 20;
+                effectLayer.addChild(bolt);
+                effects.push({
+                    graphic: bolt,
+                    life,
+                    maxLife: life,
+                    update: (progress, graphic) => {
+                        const clamped = Math.max(0, Math.min(1, progress));
+                        const visibleSegments = Math.max(1, Math.ceil(clamped * (points.length - 1)));
+                        graphic.clear();
+
+                        for (let segment = 0; segment < visibleSegments; segment += 1) {
+                            const from = points[segment];
+                            const to = points[segment + 1];
+                            if (to == null) {
+                                continue;
+                            }
+
+                            const jitter = (1 - clamped) * 8;
+                            const midX = (from.x + to.x) / 2 + (Math.random() - 0.5) * jitter;
+                            const midY = (from.y + to.y) / 2 + (Math.random() - 0.5) * jitter;
+
+                            graphic.moveTo(from.x, from.y);
+                            graphic.lineTo(midX, midY);
+                            graphic.lineTo(to.x, to.y);
+                            graphic.stroke({width: 3.2, color: 0xc084fc, alpha: 0.92});
+
+                            graphic.moveTo(from.x, from.y);
+                            graphic.lineTo(midX, midY);
+                            graphic.lineTo(to.x, to.y);
+                            graphic.stroke({width: 1.2, color: 0xffffff, alpha: 0.95});
+                        }
+                    },
+                });
+            };
+
+            const createEnemyStrikeEffect = (x: number, y: number): void => {
+                const strike = new Graphics();
+                strike.moveTo(x - 12, y - 12);
+                strike.lineTo(x + 12, y + 12);
+                strike.moveTo(x + 12, y - 12);
+                strike.lineTo(x - 12, y + 12);
+                strike.stroke({width: 3, color: 0xfca5a5, alpha: 0.95});
+                effectLayer.addChild(strike);
+                effects.push({graphic: strike, life: 7, maxLife: 7});
             };
 
             const spawnEnemy = (): void => {
@@ -216,6 +315,9 @@ export const TowerDefenseBoard = (): ReactElement => {
                     id: `enemy-${enemyCounter++}`,
                     sprite,
                     speed: 0.72 + Math.random() * 0.52,
+                    attack: 10,
+                    attackRange: 60,
+                    cooldown: 0,
                     hp: 110,
                     maxHp: 110,
                     healthBarBg,
@@ -247,6 +349,9 @@ export const TowerDefenseBoard = (): ReactElement => {
                 sprite.y = y;
 
                 let rangeCircle: Graphics | null = null;
+                let shieldCircle: Graphics | null = null;
+                let shieldBarBg: Graphics | null = null;
+                let shieldBar: Graphics | null = null;
                 if (card.type === 'melee') {
                     rangeCircle = new Graphics();
                     rangeCircle.circle(0, 0, 88);
@@ -255,6 +360,16 @@ export const TowerDefenseBoard = (): ReactElement => {
                     rangeCircle.x = x;
                     rangeCircle.y = y;
                     defenderLayer.addChild(rangeCircle);
+
+                    shieldCircle = new Graphics();
+                    shieldCircle.x = x;
+                    shieldCircle.y = y;
+                    defenderLayer.addChild(shieldCircle);
+
+                    shieldBarBg = new Graphics();
+                    shieldBar = new Graphics();
+                    defenderLayer.addChild(shieldBarBg);
+                    defenderLayer.addChild(shieldBar);
                 }
 
                 defenderLayer.addChild(sprite);
@@ -264,24 +379,92 @@ export const TowerDefenseBoard = (): ReactElement => {
                     sprite,
                     hp: card.health,
                     maxHp: card.health,
+                    shield: card.shield,
+                    maxShield: card.shield,
+                    shieldRechargeTimer: 0,
+                    shieldCircle,
+                    shieldBarBg,
+                    shieldBar,
                     cooldown: 0,
                     rangeCircle,
                 });
             };
 
-            const findClosestEnemy = (x: number, y: number): Enemy | null => {
-                let closest: Enemy | null = null;
+            const findClosestDefender = (x: number, y: number): Defender | null => {
+                let closest: Defender | null = null;
                 let minDistance = Number.POSITIVE_INFINITY;
-                for (const enemy of enemies) {
-                    const dx = enemy.sprite.x - x;
-                    const dy = enemy.sprite.y - y;
+                for (const defender of defenders) {
+                    const dx = defender.sprite.x - x;
+                    const dy = defender.sprite.y - y;
                     const distance = Math.sqrt(dx * dx + dy * dy);
                     if (distance < minDistance) {
                         minDistance = distance;
-                        closest = enemy;
+                        closest = defender;
                     }
                 }
                 return closest;
+            };
+
+            const removeDefender = (index: number): void => {
+                const defender = defenders[index];
+                defender.sprite.destroy();
+                defender.rangeCircle?.destroy();
+                defender.shieldCircle?.destroy();
+                defender.shieldBarBg?.destroy();
+                defender.shieldBar?.destroy();
+                defenders.splice(index, 1);
+            };
+
+            const damageDefender = (defender: Defender, amount: number): void => {
+                let pendingDamage = amount;
+
+                if (defender.card.type === 'melee' && defender.maxShield > 0) {
+                    const absorbed = Math.min(defender.shield, pendingDamage);
+                    defender.shield -= absorbed;
+                    pendingDamage -= absorbed;
+                    defender.shieldRechargeTimer = 110;
+                }
+
+                if (pendingDamage > 0) {
+                    defender.hp = Math.max(0, defender.hp - pendingDamage);
+                }
+            };
+
+            const updateDefenderShieldVisuals = (deltaTime: number): void => {
+                for (const defender of defenders) {
+                    if (defender.card.type !== 'melee' || defender.maxShield <= 0) {
+                        continue;
+                    }
+
+                    defender.shieldRechargeTimer = Math.max(0, defender.shieldRechargeTimer - deltaTime);
+                    if (defender.shieldRechargeTimer <= 0 && defender.shield < defender.maxShield) {
+                        defender.shield = Math.min(defender.maxShield, defender.shield + 0.36 * deltaTime);
+                    }
+
+                    const ratio = Math.max(0, Math.min(1, defender.shield / defender.maxShield));
+
+                    if (defender.shieldCircle != null) {
+                        defender.shieldCircle.clear();
+                        defender.shieldCircle.circle(0, 0, 32 + ratio * 10);
+                        defender.shieldCircle.fill({color: 0x67e8f9, alpha: 0.08 + ratio * 0.16});
+                        defender.shieldCircle.stroke({width: 2, color: 0x67e8f9, alpha: 0.25 + ratio * 0.55});
+                    }
+
+                    if (defender.shieldBarBg != null && defender.shieldBar != null) {
+                        const barWidth = 42;
+                        const barHeight = 5;
+                        const left = defender.sprite.x - barWidth / 2;
+                        const top = defender.sprite.y - 40;
+
+                        defender.shieldBarBg.clear();
+                        defender.shieldBarBg.rect(left, top, barWidth, barHeight);
+                        defender.shieldBarBg.fill({color: 0x0f172a, alpha: 0.72});
+
+                        defender.shieldBar.clear();
+                        defender.shieldBar.rect(left, top, barWidth * ratio, barHeight);
+                        defender.shieldBar.fill({color: 0x67e8f9, alpha: 0.9});
+                    }
+                }
             };
 
             const updateDefenderAttacks = (deltaTime: number): void => {
@@ -339,23 +522,45 @@ export const TowerDefenseBoard = (): ReactElement => {
                         if (target != null) {
                             damageEnemy(target, defender.card.attack * 1.35);
                             createArrowEffect(defender.sprite.x + 8, defender.sprite.y - 3, target.sprite.x, target.sprite.y);
-                            defender.cooldown = 24;
+                            defender.cooldown = 29;
                         }
                         continue;
                     }
 
                     const randomEnemy = enemies[Math.floor(Math.random() * enemies.length)];
                     if (randomEnemy != null) {
-                        const blastRadius = 78;
-                        createMagicBlast(randomEnemy.sprite.x, randomEnemy.sprite.y, blastRadius);
-                        for (const enemy of enemies) {
-                            const dx = enemy.sprite.x - randomEnemy.sprite.x;
-                            const dy = enemy.sprite.y - randomEnemy.sprite.y;
-                            if ((dx * dx + dy * dy) <= blastRadius * blastRadius) {
-                                damageEnemy(enemy, defender.card.attack * 1.1);
+                        const jumpPoints: Array<{x: number; y: number}> = [{x: defender.sprite.x, y: defender.sprite.y}];
+                        const chainTargets: Enemy[] = [randomEnemy];
+                        let anchor = randomEnemy;
+
+                        for (let jump = 0; jump < 2; jump += 1) {
+                            const nextTarget = enemies
+                                .filter((enemy) => enemy.id !== anchor.id && !chainTargets.some((used) => used.id === enemy.id))
+                                .map((enemy) => {
+                                    const dx = enemy.sprite.x - anchor.sprite.x;
+                                    const dy = enemy.sprite.y - anchor.sprite.y;
+                                    return {enemy, distanceSq: dx * dx + dy * dy};
+                                })
+                                .filter((entry) => entry.distanceSq <= 165 * 165)
+                                .sort((a, b) => a.distanceSq - b.distanceSq)[0]?.enemy;
+
+                            if (nextTarget == null) {
+                                break;
                             }
+
+                            chainTargets.push(nextTarget);
+                            anchor = nextTarget;
                         }
-                        defender.cooldown = 58;
+
+                        for (let index = 0; index < chainTargets.length; index += 1) {
+                            const target = chainTargets[index];
+                            jumpPoints.push({x: target.sprite.x, y: target.sprite.y});
+                            const falloff = Math.max(0.55, 1 - index * 0.23);
+                            damageEnemy(target, defender.card.attack * 1.22 * falloff);
+                        }
+
+                        createMagicBoltEffect(jumpPoints);
+                        defender.cooldown = 64;
                     }
                 }
             };
@@ -363,8 +568,10 @@ export const TowerDefenseBoard = (): ReactElement => {
             const updateEffects = (): void => {
                 for (let index = effects.length - 1; index >= 0; index -= 1) {
                     const effect = effects[index];
+                    const progress = 1 - (effect.life / effect.maxLife);
+                    effect.update?.(progress, effect.graphic);
                     effect.life -= 1;
-                    effect.graphic.alpha = Math.max(0, effect.life / 16);
+                    effect.graphic.alpha = Math.max(0, effect.life / effect.maxLife);
                     if (effect.life <= 0) {
                         effect.graphic.destroy();
                         effects.splice(index, 1);
@@ -376,15 +583,35 @@ export const TowerDefenseBoard = (): ReactElement => {
                 const deltaTime = ticker.deltaTime;
 
                 updateDefenderAttacks(deltaTime);
+                updateDefenderShieldVisuals(deltaTime);
                 updateEffects();
 
                 for (let index = enemies.length - 1; index >= 0; index -= 1) {
                     const enemy = enemies[index];
-                    enemy.sprite.x -= enemy.speed * deltaTime;
+                    enemy.cooldown = Math.max(0, enemy.cooldown - deltaTime);
 
-                    const nearestDefender = findClosestEnemy(enemy.sprite.x - 12, enemy.sprite.y);
-                    if (nearestDefender == null && enemy.sprite.x < -70) {
-                        enemy.hp = 0;
+                    const nearestDefender = findClosestDefender(enemy.sprite.x, enemy.sprite.y);
+                    if (nearestDefender != null) {
+                        const dx = nearestDefender.sprite.x - enemy.sprite.x;
+                        const dy = nearestDefender.sprite.y - enemy.sprite.y;
+                        const distance = Math.sqrt(dx * dx + dy * dy);
+
+                        if (distance <= enemy.attackRange) {
+                            enemy.sprite.tint = 0xdc2626;
+                            if (enemy.cooldown <= 0) {
+                                damageDefender(nearestDefender, enemy.attack);
+                                createEnemyStrikeEffect(nearestDefender.sprite.x, nearestDefender.sprite.y);
+                                enemy.cooldown = 42;
+                            }
+                        } else if (distance > 0) {
+                            enemy.sprite.tint = 0xef4444;
+                            const step = enemy.speed * deltaTime;
+                            enemy.sprite.x += (dx / distance) * step;
+                            enemy.sprite.y += (dy / distance) * step;
+                        }
+                    } else {
+                        enemy.sprite.tint = 0xef4444;
+                        enemy.sprite.x -= enemy.speed * deltaTime;
                     }
 
                     if (enemy.hp <= 0) {
@@ -402,6 +629,12 @@ export const TowerDefenseBoard = (): ReactElement => {
                         enemy.healthBarBg.destroy();
                         enemy.healthBar.destroy();
                         enemies.splice(index, 1);
+                    }
+                }
+
+                for (let index = defenders.length - 1; index >= 0; index -= 1) {
+                    if (defenders[index].hp <= 0) {
+                        removeDefender(index);
                     }
                 }
 
@@ -637,6 +870,24 @@ export const TowerDefenseBoard = (): ReactElement => {
                         <div>Type: {card.type}</div>
                         <div>Cost: {card.cost}</div>
                         <div>ATK: {card.attack} • HP: {card.health}</div>
+                        {card.type === 'melee' ? <>
+                            <div style={{marginTop: 4}}>Shield: {card.shield} (recharging)</div>
+                            <div style={{
+                                marginTop: 3,
+                                width: '100%',
+                                height: 5,
+                                borderRadius: 999,
+                                background: 'rgba(15, 23, 42, 0.95)',
+                                border: '1px solid rgba(103, 232, 249, 0.5)',
+                            }}>
+                                <div style={{
+                                    width: '100%',
+                                    height: '100%',
+                                    borderRadius: 999,
+                                    background: 'linear-gradient(90deg, rgba(34,211,238,0.9), rgba(125,211,252,0.95))',
+                                }}/>
+                            </div>
+                        </> : null}
                     </div>
                 </div>;
             })}
