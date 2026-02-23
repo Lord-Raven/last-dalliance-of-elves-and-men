@@ -41,6 +41,7 @@ type Defender = {
     shieldBar: Graphics | null;
     cooldown: number;
     rangeCircle: Graphics | null;
+    rangeCone: Graphics | null;
 };
 
 type Effect = {
@@ -72,6 +73,14 @@ const TYPE_TINT: Record<ElfType, number> = {
     ranged: 0x60a5fa,
     magic: 0xc084fc,
 };
+
+const MELEE_RANGE = 88;
+const RANGED_CONE_RANGE = 500;
+const RANGED_CONE_HALF_ANGLE = 0.28;
+const MAGIC_RANGE = 280;
+const ENEMY_MAGNET_RADIUS = 220;
+const ENEMY_MAGNET_PULL = 0.22;
+const ENEMY_MAX_VERTICAL_DRIFT = 0.32;
 
 const drawHand = (size: number): Card[] => {
     const shuffled = [...CARD_POOL].sort(() => Math.random() - 0.5);
@@ -284,6 +293,29 @@ export const TowerDefenseBoard = (): ReactElement => {
                 });
             };
 
+            const createMagicImpactRadiusEffect = (x: number, y: number, radius: number): void => {
+                const impact = new Graphics();
+                const life = 14;
+                effectLayer.addChild(impact);
+                effects.push({
+                    graphic: impact,
+                    life,
+                    maxLife: life,
+                    update: (progress, graphic) => {
+                        const clamped = Math.max(0, Math.min(1, progress));
+                        const currentRadius = radius * (0.55 + clamped * 0.65);
+                        const innerRadius = currentRadius * 0.62;
+
+                        graphic.clear();
+                        graphic.circle(x, y, currentRadius);
+                        graphic.stroke({width: 3, color: 0xe9d5ff, alpha: 0.92 * (1 - clamped * 0.75)});
+
+                        graphic.circle(x, y, innerRadius);
+                        graphic.fill({color: 0xc084fc, alpha: 0.24 * (1 - clamped)});
+                    },
+                });
+            };
+
             const createEnemyStrikeEffect = (x: number, y: number): void => {
                 const strike = new Graphics();
                 strike.moveTo(x - 12, y - 12);
@@ -349,12 +381,13 @@ export const TowerDefenseBoard = (): ReactElement => {
                 sprite.y = y;
 
                 let rangeCircle: Graphics | null = null;
+                let rangeCone: Graphics | null = null;
                 let shieldCircle: Graphics | null = null;
                 let shieldBarBg: Graphics | null = null;
                 let shieldBar: Graphics | null = null;
                 if (card.type === 'melee') {
                     rangeCircle = new Graphics();
-                    rangeCircle.circle(0, 0, 88);
+                    rangeCircle.circle(0, 0, MELEE_RANGE);
                     rangeCircle.fill({color: 0x4ade80, alpha: 0.1});
                     rangeCircle.stroke({width: 2, color: 0x4ade80, alpha: 0.35});
                     rangeCircle.x = x;
@@ -370,6 +403,24 @@ export const TowerDefenseBoard = (): ReactElement => {
                     shieldBar = new Graphics();
                     defenderLayer.addChild(shieldBarBg);
                     defenderLayer.addChild(shieldBar);
+                } else if (card.type === 'ranged') {
+                    rangeCone = new Graphics();
+                    rangeCone.moveTo(0, 0);
+                    rangeCone.arc(0, 0, RANGED_CONE_RANGE, -RANGED_CONE_HALF_ANGLE, RANGED_CONE_HALF_ANGLE);
+                    rangeCone.closePath();
+                    rangeCone.fill({color: 0x60a5fa, alpha: 0.08});
+                    rangeCone.stroke({width: 2, color: 0x60a5fa, alpha: 0.34});
+                    rangeCone.x = x;
+                    rangeCone.y = y;
+                    defenderLayer.addChild(rangeCone);
+                } else {
+                    rangeCircle = new Graphics();
+                    rangeCircle.circle(0, 0, MAGIC_RANGE);
+                    rangeCircle.fill({color: 0xc084fc, alpha: 0.07});
+                    rangeCircle.stroke({width: 2, color: 0xc084fc, alpha: 0.32});
+                    rangeCircle.x = x;
+                    rangeCircle.y = y;
+                    defenderLayer.addChild(rangeCircle);
                 }
 
                 defenderLayer.addChild(sprite);
@@ -387,13 +438,18 @@ export const TowerDefenseBoard = (): ReactElement => {
                     shieldBar,
                     cooldown: 0,
                     rangeCircle,
+                    rangeCone,
                 });
             };
 
-            const findClosestDefender = (x: number, y: number): Defender | null => {
+            const findClosestDefender = (x: number, y: number, predicate?: (defender: Defender) => boolean): Defender | null => {
                 let closest: Defender | null = null;
                 let minDistance = Number.POSITIVE_INFINITY;
                 for (const defender of defenders) {
+                    if (predicate != null && !predicate(defender)) {
+                        continue;
+                    }
+
                     const dx = defender.sprite.x - x;
                     const dy = defender.sprite.y - y;
                     const distance = Math.sqrt(dx * dx + dy * dy);
@@ -409,6 +465,7 @@ export const TowerDefenseBoard = (): ReactElement => {
                 const defender = defenders[index];
                 defender.sprite.destroy();
                 defender.rangeCircle?.destroy();
+                defender.rangeCone?.destroy();
                 defender.shieldCircle?.destroy();
                 defender.shieldBarBg?.destroy();
                 defender.shieldBar?.destroy();
@@ -479,7 +536,7 @@ export const TowerDefenseBoard = (): ReactElement => {
                     }
 
                     if (defender.card.type === 'melee') {
-                        const slashRadius = 88;
+                        const slashRadius = MELEE_RANGE;
                         const targets = enemies.filter((enemy) => {
                             const dx = enemy.sprite.x - defender.sprite.x;
                             const dy = enemy.sprite.y - defender.sprite.y;
@@ -497,8 +554,8 @@ export const TowerDefenseBoard = (): ReactElement => {
                     }
 
                     if (defender.card.type === 'ranged') {
-                        const coneLength = 270;
-                        const halfAngle = 0.28;
+                        const coneLength = RANGED_CONE_RANGE;
+                        const halfAngle = RANGED_CONE_HALF_ANGLE;
 
                         const inCone = enemies
                             .filter((enemy) => {
@@ -527,7 +584,13 @@ export const TowerDefenseBoard = (): ReactElement => {
                         continue;
                     }
 
-                    const randomEnemy = enemies[Math.floor(Math.random() * enemies.length)];
+                    const inMagicRange = enemies.filter((enemy) => {
+                        const dx = enemy.sprite.x - defender.sprite.x;
+                        const dy = enemy.sprite.y - defender.sprite.y;
+                        return (dx * dx + dy * dy) <= MAGIC_RANGE * MAGIC_RANGE;
+                    });
+
+                    const randomEnemy = inMagicRange[Math.floor(Math.random() * inMagicRange.length)];
                     if (randomEnemy != null) {
                         const jumpPoints: Array<{x: number; y: number}> = [{x: defender.sprite.x, y: defender.sprite.y}];
                         const chainTargets: Enemy[] = [randomEnemy];
@@ -557,6 +620,7 @@ export const TowerDefenseBoard = (): ReactElement => {
                             jumpPoints.push({x: target.sprite.x, y: target.sprite.y});
                             const falloff = Math.max(0.55, 1 - index * 0.23);
                             damageEnemy(target, defender.card.attack * 1.22 * falloff);
+                            createMagicImpactRadiusEffect(target.sprite.x, target.sprite.y, 56);
                         }
 
                         createMagicBoltEffect(jumpPoints);
@@ -590,28 +654,38 @@ export const TowerDefenseBoard = (): ReactElement => {
                     const enemy = enemies[index];
                     enemy.cooldown = Math.max(0, enemy.cooldown - deltaTime);
 
-                    const nearestDefender = findClosestDefender(enemy.sprite.x, enemy.sprite.y);
-                    if (nearestDefender != null) {
-                        const dx = nearestDefender.sprite.x - enemy.sprite.x;
-                        const dy = nearestDefender.sprite.y - enemy.sprite.y;
-                        const distance = Math.sqrt(dx * dx + dy * dy);
+                    const attackTarget = findClosestDefender(enemy.sprite.x, enemy.sprite.y, (defender) => {
+                        const dx = defender.sprite.x - enemy.sprite.x;
+                        const dy = defender.sprite.y - enemy.sprite.y;
+                        return (dx * dx + dy * dy) <= enemy.attackRange * enemy.attackRange;
+                    });
 
-                        if (distance <= enemy.attackRange) {
-                            enemy.sprite.tint = 0xdc2626;
-                            if (enemy.cooldown <= 0) {
-                                damageDefender(nearestDefender, enemy.attack);
-                                createEnemyStrikeEffect(nearestDefender.sprite.x, nearestDefender.sprite.y);
-                                enemy.cooldown = 42;
-                            }
-                        } else if (distance > 0) {
-                            enemy.sprite.tint = 0xef4444;
-                            const step = enemy.speed * deltaTime;
-                            enemy.sprite.x += (dx / distance) * step;
-                            enemy.sprite.y += (dy / distance) * step;
+                    if (attackTarget != null) {
+                        enemy.sprite.tint = 0xdc2626;
+                        if (enemy.cooldown <= 0) {
+                            damageDefender(attackTarget, enemy.attack);
+                            createEnemyStrikeEffect(attackTarget.sprite.x, attackTarget.sprite.y);
+                            enemy.cooldown = 42;
                         }
                     } else {
                         enemy.sprite.tint = 0xef4444;
                         enemy.sprite.x -= enemy.speed * deltaTime;
+
+                        const magnetTarget = findClosestDefender(enemy.sprite.x, enemy.sprite.y, (defender) => {
+                            const dx = defender.sprite.x - enemy.sprite.x;
+                            const dy = defender.sprite.y - enemy.sprite.y;
+                            return (dx * dx + dy * dy) <= ENEMY_MAGNET_RADIUS * ENEMY_MAGNET_RADIUS;
+                        });
+
+                        if (magnetTarget != null) {
+                            const dy = magnetTarget.sprite.y - enemy.sprite.y;
+                            const maxDrift = ENEMY_MAX_VERTICAL_DRIFT * deltaTime;
+                            const pullDelta = dy * ENEMY_MAGNET_PULL;
+                            const clampedDelta = Math.max(-maxDrift, Math.min(maxDrift, pullDelta));
+                            enemy.sprite.y += clampedDelta;
+                        }
+
+                        enemy.sprite.y = Math.max(42, Math.min(app.renderer.height - 42, enemy.sprite.y));
                     }
 
                     if (enemy.hp <= 0) {
