@@ -1,18 +1,6 @@
 import {ReactElement, useEffect, useMemo, useRef, useState} from "react";
 import {Application, Assets, Container, Graphics, Sprite, Text, TextStyle, TilingSprite, Texture} from "pixi.js";
-
-type ElfType = 'ranged' | 'melee' | 'magic';
-
-type Card = {
-    id: string;
-    name: string;
-    type: ElfType;
-    cost: number;
-    attack: number;
-    health: number;
-    shield: number;
-    portrait: string;
-};
+import {Card, drawHand} from "./Unit";
 
 type Enemy = {
     id: string;
@@ -56,23 +44,6 @@ type BoardApi = {
     startWave: () => boolean;
 };
 
-const CARD_POOL: ReadonlyArray<Omit<Card, 'id'>> = [
-    {name: 'Aelion Sentinel', type: 'melee', cost: 3, attack: 12, health: 90, shield: 44, portrait: '/placeholder/enemy-placeholder.svg'},
-    {name: 'Thornblade Guard', type: 'melee', cost: 4, attack: 15, health: 105, shield: 54, portrait: '/placeholder/enemy-placeholder.svg'},
-    {name: 'Moonwatch Archer', type: 'ranged', cost: 2, attack: 10, health: 64, shield: 0, portrait: '/placeholder/enemy-placeholder.svg'},
-    {name: 'Galeleaf Ranger', type: 'ranged', cost: 3, attack: 13, health: 72, shield: 0, portrait: '/placeholder/enemy-placeholder.svg'},
-    {name: 'Starbloom Mage', type: 'magic', cost: 4, attack: 16, health: 58, shield: 0, portrait: '/placeholder/enemy-placeholder.svg'},
-    {name: 'Runesong Mystic', type: 'magic', cost: 5, attack: 20, health: 62, shield: 0, portrait: '/placeholder/enemy-placeholder.svg'},
-    {name: 'Sunbark Duelist', type: 'melee', cost: 2, attack: 9, health: 78, shield: 36, portrait: '/placeholder/enemy-placeholder.svg'},
-    {name: 'Whisperwind Scout', type: 'ranged', cost: 1, attack: 7, health: 54, shield: 0, portrait: '/placeholder/enemy-placeholder.svg'},
-    {name: 'Silver Veil Adept', type: 'magic', cost: 3, attack: 12, health: 52, shield: 0, portrait: '/placeholder/enemy-placeholder.svg'},
-];
-
-const TYPE_TINT: Record<ElfType, number> = {
-    melee: 0x22c55e,
-    ranged: 0x60a5fa,
-    magic: 0xc084fc,
-};
 
 const MELEE_RANGE = 88;
 const RANGED_CONE_RANGE = 500;
@@ -81,18 +52,13 @@ const MAGIC_RANGE = 280;
 const ENEMY_MAGNET_RADIUS = 220;
 const ENEMY_MAGNET_PULL = 0.22;
 const ENEMY_MAX_VERTICAL_DRIFT = 0.32;
-
-const drawHand = (size: number): Card[] => {
-    const shuffled = [...CARD_POOL].sort(() => Math.random() - 0.5);
-    return shuffled.slice(0, size).map((card, index) => ({
-        ...card,
-        id: `${card.name}-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
-    }));
-};
+const DEFENDER_SPRITE_WIDTH = 64;
+const DEFENDER_SPRITE_HEIGHT = 96;
 
 export const TowerDefenseBoard = (): ReactElement => {
     const stageRef = useRef<HTMLDivElement>(null);
     const boardApiRef = useRef<BoardApi | null>(null);
+    const dragImageRef = useRef<HTMLImageElement | null>(null);
     const [isWaveRunning, setIsWaveRunning] = useState<boolean>(false);
     const [gold, setGold] = useState<number>(14);
     const [hand, setHand] = useState<Card[]>(() => drawHand(6));
@@ -374,11 +340,20 @@ export const TowerDefenseBoard = (): ReactElement => {
             const spawnDefender = (card: Card, x: number, y: number): void => {
                 const sprite = new Sprite(enemyTexture);
                 sprite.anchor.set(0.5);
-                sprite.width = 52;
-                sprite.height = 52;
-                sprite.tint = TYPE_TINT[card.type];
+                sprite.width = DEFENDER_SPRITE_WIDTH;
+                sprite.height = DEFENDER_SPRITE_HEIGHT;
                 sprite.x = x;
                 sprite.y = y;
+
+                void Assets.load(card.portrait)
+                    .then((texture) => {
+                        if (sprite.destroyed) {
+                            return;
+                        }
+
+                        sprite.texture = texture as Texture;
+                    })
+                    .catch(() => undefined);
 
                 let rangeCircle: Graphics | null = null;
                 let rangeCone: Graphics | null = null;
@@ -803,8 +778,38 @@ export const TowerDefenseBoard = (): ReactElement => {
         }
     };
 
+    const clearDragImage = (): void => {
+        if (dragImageRef.current != null) {
+            dragImageRef.current.remove();
+            dragImageRef.current = null;
+        }
+    };
+
+    const handleCardDragStart = (event: React.DragEvent<HTMLDivElement>, card: Card): void => {
+        event.dataTransfer.setData('application/x-elf-card', card.id);
+
+        clearDragImage();
+
+        const dragImage = document.createElement('img');
+        dragImage.src = card.portrait;
+        dragImage.alt = card.name;
+        dragImage.width = DEFENDER_SPRITE_WIDTH;
+        dragImage.height = DEFENDER_SPRITE_HEIGHT;
+        dragImage.style.position = 'fixed';
+        dragImage.style.top = '-10000px';
+        dragImage.style.left = '-10000px';
+        dragImage.style.width = `${DEFENDER_SPRITE_WIDTH}px`;
+        dragImage.style.height = `${DEFENDER_SPRITE_HEIGHT}px`;
+        dragImage.style.pointerEvents = 'none';
+
+        document.body.appendChild(dragImage);
+        dragImageRef.current = dragImage;
+        event.dataTransfer.setDragImage(dragImage, DEFENDER_SPRITE_WIDTH / 2, DEFENDER_SPRITE_HEIGHT / 2);
+    };
+
     const handleDrop = (event: React.DragEvent<HTMLDivElement>): void => {
         event.preventDefault();
+        clearDragImage();
 
         if (isWaveRunning) {
             setStatusText('Cannot deploy while a round is active.');
@@ -915,7 +920,8 @@ export const TowerDefenseBoard = (): ReactElement => {
                 return <div
                     key={card.id}
                     draggable={!isWaveRunning && affordable}
-                    onDragStart={(event) => event.dataTransfer.setData('application/x-elf-card', card.id)}
+                    onDragStart={(event) => handleCardDragStart(event, card)}
+                    onDragEnd={clearDragImage}
                     style={{
                         width: 146,
                         borderRadius: 12,
@@ -942,6 +948,7 @@ export const TowerDefenseBoard = (): ReactElement => {
                     <div style={{fontSize: 13, fontWeight: 700, marginBottom: 6}}>{card.name}</div>
                     <div style={{fontSize: 12, opacity: 0.92, lineHeight: 1.32}}>
                         <div>Type: {card.type}</div>
+                        <div>Body/Hair: {card.bodyType} / {card.hairType}</div>
                         <div>Cost: {card.cost}</div>
                         <div>ATK: {card.attack} • HP: {card.health}</div>
                         {card.type === 'melee' ? <>
