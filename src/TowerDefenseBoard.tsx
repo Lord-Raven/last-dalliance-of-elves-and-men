@@ -52,8 +52,11 @@ const MAGIC_RANGE = 280;
 const ENEMY_MAGNET_RADIUS = 220;
 const ENEMY_MAGNET_PULL = 0.22;
 const ENEMY_MAX_VERTICAL_DRIFT = 0.32;
-const DEFENDER_SPRITE_WIDTH = 64;
-const DEFENDER_SPRITE_HEIGHT = 96;
+const DEFENDER_SPRITE_WIDTH = 200;
+const DEFENDER_SPRITE_HEIGHT = 300;
+const DEFENDER_HALF_WIDTH = DEFENDER_SPRITE_WIDTH / 2;
+const DEFENDER_HALF_HEIGHT = DEFENDER_SPRITE_HEIGHT / 2;
+const DEFENDER_BAR_Y_OFFSET = DEFENDER_HALF_HEIGHT + 18;
 
 export const TowerDefenseBoard = (): ReactElement => {
     const stageRef = useRef<HTMLDivElement>(null);
@@ -93,6 +96,8 @@ export const TowerDefenseBoard = (): ReactElement => {
             await app.init({
                 resizeTo: stageHost,
                 antialias: true,
+                resolution: Math.max(1, window.devicePixelRatio || 1),
+                autoDensity: true,
                 backgroundAlpha: 0,
             });
 
@@ -102,6 +107,7 @@ export const TowerDefenseBoard = (): ReactElement => {
             }
 
             stageHost.appendChild(app.canvas);
+            app.canvas.style.imageRendering = 'auto';
 
             const world = new Container();
             app.stage.addChild(world);
@@ -351,7 +357,13 @@ export const TowerDefenseBoard = (): ReactElement => {
                             return;
                         }
 
-                        sprite.texture = texture as Texture;
+                        const loadedTexture = texture as Texture;
+                        const sourceWithScaleMode = loadedTexture.source as unknown as {scaleMode?: 'nearest' | 'linear'};
+                        if (sourceWithScaleMode.scaleMode != null) {
+                            sourceWithScaleMode.scaleMode = 'linear';
+                        }
+
+                        sprite.texture = loadedTexture;
                     })
                     .catch(() => undefined);
 
@@ -486,7 +498,7 @@ export const TowerDefenseBoard = (): ReactElement => {
                         const barWidth = 42;
                         const barHeight = 5;
                         const left = defender.sprite.x - barWidth / 2;
-                        const top = defender.sprite.y - 40;
+                        const top = defender.sprite.y - DEFENDER_BAR_Y_OFFSET;
 
                         defender.shieldBarBg.clear();
                         defender.shieldBarBg.rect(left, top, barWidth, barHeight);
@@ -731,19 +743,20 @@ export const TowerDefenseBoard = (): ReactElement => {
                 }
 
                 const clampedX = Math.max(60, Math.min(app.renderer.width - 70, x));
-                const clampedY = Math.max(80, Math.min(app.renderer.height - 80, y));
+                const clampedY = Math.max(DEFENDER_HALF_HEIGHT + 20, Math.min(app.renderer.height - DEFENDER_HALF_HEIGHT - 20, y));
+                const clampedSafeX = Math.max(DEFENDER_HALF_WIDTH + 10, Math.min(app.renderer.width - DEFENDER_HALF_WIDTH - 10, clampedX));
 
                 const tooClose = defenders.some((defender) => {
-                    const dx = defender.sprite.x - clampedX;
+                    const dx = defender.sprite.x - clampedSafeX;
                     const dy = defender.sprite.y - clampedY;
-                    return (dx * dx + dy * dy) < (70 * 70);
+                    return (dx * dx + dy * dy) < (216 * 216);
                 });
 
                 if (tooClose) {
                     return false;
                 }
 
-                spawnDefender(card, clampedX, clampedY);
+                spawnDefender(card, clampedSafeX, clampedY);
                 return true;
             };
 
