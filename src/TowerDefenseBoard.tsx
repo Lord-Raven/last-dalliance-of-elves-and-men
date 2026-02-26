@@ -39,8 +39,6 @@ type Defender = {
     healthPips: Graphics;
     shieldPips: Graphics | null;
     shieldCircle: Graphics | null;
-    rangeCircle: Graphics | null;
-    rangeCone: Graphics | null;
 };
 
 type Effect = {
@@ -63,6 +61,8 @@ type FloatingDragCard = {
     y: number;
     startX: number;
     startY: number;
+    pointerX: number;
+    pointerY: number;
     rotation: number;
     mode: 'dragging' | 'returning';
 };
@@ -300,7 +300,6 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
             const defenders: Defender[] = [];
             const effects: Effect[] = [];
             let placementPreview: Graphics | null = null;
-            let placementPreviewType: Unit['type'] | null = null;
             let draggingDefender: {defender: Defender; originRow: number; originCol: number} | null = null;
 
             const laneFractions = [0.2, 0.35, 0.5, 0.65, 0.8];
@@ -566,16 +565,6 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 defender.sprite.x = center.x;
                 defender.sprite.y = center.y + gridTileSize * 0.34;
 
-                if (defender.rangeCircle != null) {
-                    defender.rangeCircle.x = center.x;
-                    defender.rangeCircle.y = center.y;
-                }
-
-                if (defender.rangeCone != null) {
-                    defender.rangeCone.x = center.x;
-                    defender.rangeCone.y = center.y;
-                }
-
                 if (defender.shieldCircle != null) {
                     defender.shieldCircle.x = center.x;
                     defender.shieldCircle.y = center.y;
@@ -702,37 +691,16 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                     })
                     .catch(() => undefined);
 
-                let rangeCircle: Graphics | null = null;
-                let rangeCone: Graphics | null = null;
                 let shieldCircle: Graphics | null = null;
                 let shieldPips: Graphics | null = null;
                 const healthPips = new Graphics();
 
                 if (card.type === 'melee') {
-                    rangeCircle = new Graphics();
-                    rangeCircle.circle(0, 0, gridTileSize * 1.05);
-                    rangeCircle.fill({color: 0x4ade80, alpha: 0.08});
-                    rangeCircle.stroke({width: 2, color: 0x4ade80, alpha: 0.28});
-                    defenderGroundLayer.addChild(rangeCircle);
-
                     shieldCircle = new Graphics();
                     defenderGroundLayer.addChild(shieldCircle);
 
                     shieldPips = new Graphics();
                     defenderLayer.addChild(shieldPips);
-                } else if (card.type === 'ranged') {
-                    rangeCone = new Graphics();
-                    const rowLength = (gridCols - col) * gridTileSize;
-                    rangeCone.rect(0, -gridTileSize / 2 + 2, rowLength, gridTileSize - 4);
-                    rangeCone.fill({color: 0x60a5fa, alpha: 0.08});
-                    rangeCone.stroke({width: 2, color: 0x60a5fa, alpha: 0.28});
-                    defenderGroundLayer.addChild(rangeCone);
-                } else {
-                    rangeCircle = new Graphics();
-                    rangeCircle.circle(0, 0, gridTileSize * 1.1);
-                    rangeCircle.fill({color: 0xc084fc, alpha: 0.07});
-                    rangeCircle.stroke({width: 2, color: 0xc084fc, alpha: 0.27});
-                    defenderGroundLayer.addChild(rangeCircle);
                 }
 
                 defenderLayer.addChild(sprite);
@@ -751,8 +719,6 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                     healthPips,
                     shieldPips,
                     shieldCircle,
-                    rangeCircle,
-                    rangeCone,
                 };
 
                 defenders.push(defender);
@@ -788,8 +754,35 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 if (placementPreview != null) {
                     placementPreview.destroy();
                     placementPreview = null;
-                    placementPreviewType = null;
                 }
+            };
+
+            const getTargetTilesForType = (type: Unit['type'], row: number, col: number): Array<{row: number; col: number}> => {
+                if (type === 'ranged') {
+                    const rowTargets: Array<{row: number; col: number}> = [];
+                    for (let targetCol = col; targetCol < gridCols; targetCol += 1) {
+                        rowTargets.push({row, col: targetCol});
+                    }
+                    return rowTargets;
+                }
+
+                const includeCenter = type === 'magic';
+                const nearbyTargets: Array<{row: number; col: number}> = [];
+                for (let targetRow = row - 1; targetRow <= row + 1; targetRow += 1) {
+                    for (let targetCol = col - 1; targetCol <= col + 1; targetCol += 1) {
+                        if (targetRow < 0 || targetRow >= GRID_ROWS || targetCol < 0 || targetCol >= gridCols) {
+                            continue;
+                        }
+
+                        if (!includeCenter && targetRow === row && targetCol === col) {
+                            continue;
+                        }
+
+                        nearbyTargets.push({row: targetRow, col: targetCol});
+                    }
+                }
+
+                return nearbyTargets;
             };
 
             const updatePlacementPreview = (card: Unit, x: number, y: number, ignoreDefenderId?: string): void => {
@@ -807,10 +800,8 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 const placeable = canPlaceAtTile(tile.row, tile.col, ignoreDefenderId);
                 const center = getTileCenter(tile.row, tile.col);
 
-                if (placementPreview == null || placementPreviewType !== card.type) {
-                    placementPreview?.destroy();
+                if (placementPreview == null) {
                     placementPreview = new Graphics();
-                    placementPreviewType = card.type;
                     defenderGroundLayer.addChild(placementPreview);
                 }
 
@@ -822,6 +813,21 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
 
                 const color = placeable ? colorByType[card.type] : 0xf87171;
                 placementPreview.clear();
+
+                if (placeable) {
+                    const targetTiles = getTargetTilesForType(card.type, tile.row, tile.col);
+                    for (const targetTile of targetTiles) {
+                        placementPreview.rect(
+                            gridLeft + targetTile.col * gridTileSize + 5,
+                            gridTop + targetTile.row * gridTileSize + 5,
+                            gridTileSize - 10,
+                            gridTileSize - 10,
+                        );
+                    }
+                    placementPreview.fill({color, alpha: 0.12});
+                    placementPreview.stroke({width: 1.5, color, alpha: 0.36});
+                }
+
                 placementPreview.rect(
                     center.x - gridTileSize / 2 + 2,
                     center.y - gridTileSize / 2 + 2,
@@ -838,8 +844,6 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                     draggingDefender = null;
                 }
                 defender.sprite.destroy();
-                defender.rangeCircle?.destroy();
-                defender.rangeCone?.destroy();
                 defender.shieldCircle?.destroy();
                 defender.healthPips.destroy();
                 defender.shieldPips?.destroy();
@@ -1214,14 +1218,6 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 if (canDrop && tile != null) {
                     defender.row = tile.row;
                     defender.col = tile.col;
-
-                    if (defender.card.type === 'ranged' && defender.rangeCone != null) {
-                        defender.rangeCone.clear();
-                        const rowLength = (gridCols - defender.col) * gridTileSize;
-                        defender.rangeCone.rect(0, -gridTileSize / 2 + 2, rowLength, gridTileSize - 4);
-                        defender.rangeCone.fill({color: 0x60a5fa, alpha: 0.08});
-                        defender.rangeCone.stroke({width: 2, color: 0x60a5fa, alpha: 0.28});
-                    }
                 } else {
                     defender.row = originRow;
                     defender.col = originCol;
@@ -1246,16 +1242,6 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 defender.sprite.x = pointerX;
                 defender.sprite.y = pointerY + gridTileSize * 0.34;
 
-                if (defender.rangeCircle != null) {
-                    defender.rangeCircle.x = pointerX;
-                    defender.rangeCircle.y = pointerY;
-                }
-
-                if (defender.rangeCone != null) {
-                    defender.rangeCone.x = pointerX;
-                    defender.rangeCone.y = pointerY;
-                }
-
                 if (defender.shieldCircle != null) {
                     defender.shieldCircle.x = pointerX;
                     defender.shieldCircle.y = pointerY;
@@ -1279,14 +1265,6 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 drawGrid();
 
                 for (const defender of defenders) {
-                    if (defender.card.type === 'ranged' && defender.rangeCone != null) {
-                        defender.rangeCone.clear();
-                        const rowLength = (gridCols - defender.col) * gridTileSize;
-                        defender.rangeCone.rect(0, -gridTileSize / 2 + 2, rowLength, gridTileSize - 4);
-                        defender.rangeCone.fill({color: 0x60a5fa, alpha: 0.08});
-                        defender.rangeCone.stroke({width: 2, color: 0x60a5fa, alpha: 0.28});
-                    }
-
                     syncDefenderVisual(defender);
                 }
 
@@ -1390,23 +1368,15 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
         }
     };
 
-    const getFloatingCardHoverPosition = (clientX: number, clientY: number): {x: number; y: number} | null => {
-        const boardBounds = boardRootRef.current?.getBoundingClientRect();
-        if (boardBounds == null) {
-            return null;
-        }
-
+    const getFloatingCardHoverPosition = (clientX: number, clientY: number): {x: number; y: number} => {
         return {
-            x: clientX - boardBounds.left + DRAG_CURSOR_OFFSET_X,
-            y: clientY - boardBounds.top + DRAG_CURSOR_OFFSET_Y,
+            x: clientX + DRAG_CURSOR_OFFSET_X,
+            y: clientY + DRAG_CURSOR_OFFSET_Y,
         };
     };
 
     const updateFloatingCardFromPointer = (clientX: number, clientY: number): void => {
         const position = getFloatingCardHoverPosition(clientX, clientY);
-        if (position == null) {
-            return;
-        }
 
         setFloatingDragCard((current) => {
             if (current == null || current.mode !== 'dragging') {
@@ -1417,9 +1387,26 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 ...current,
                 x: position.x,
                 y: position.y,
+                pointerX: clientX,
+                pointerY: clientY,
             };
         });
     };
+
+    useEffect(() => {
+        if (draggingCardId == null) {
+            return;
+        }
+
+        const handleWindowDragOver = (event: DragEvent): void => {
+            updateFloatingCardFromPointer(event.clientX, event.clientY);
+        };
+
+        window.addEventListener('dragover', handleWindowDragOver);
+        return () => {
+            window.removeEventListener('dragover', handleWindowDragOver);
+        };
+    }, [draggingCardId]);
 
     const animateFloatingCardBackToHand = (): void => {
         clearDragReturnTimeout();
@@ -1461,30 +1448,26 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
         event.dataTransfer.setData('application/x-elf-card', card.id);
         setDraggingCardId(card.id);
 
-        const boardBounds = boardRootRef.current?.getBoundingClientRect();
         const cardBounds = event.currentTarget.getBoundingClientRect();
         const centerIndex = (hand.length - 1) / 2;
         const cardIndex = hand.findIndex((candidate) => candidate.id === card.id);
         const fanOffset = cardIndex - centerIndex;
         const fanRotate = fanOffset * HAND_FAN_ROTATION_DEGREES;
+        const hoverPosition = getFloatingCardHoverPosition(event.clientX, event.clientY);
 
-        if (boardBounds != null) {
-            const startX = cardBounds.left - boardBounds.left;
-            const startY = cardBounds.top - boardBounds.top;
-            setFloatingDragCard({
-                card,
-                x: startX,
-                y: startY,
-                startX,
-                startY,
-                rotation: fanRotate,
-                mode: 'dragging',
-            });
-
-            window.requestAnimationFrame(() => {
-                updateFloatingCardFromPointer(event.clientX, event.clientY);
-            });
-        }
+        const startX = cardBounds.left;
+        const startY = cardBounds.top;
+        setFloatingDragCard({
+            card,
+            x: hoverPosition.x,
+            y: hoverPosition.y,
+            startX,
+            startY,
+            pointerX: event.clientX,
+            pointerY: event.clientY,
+            rotation: fanRotate,
+            mode: 'dragging',
+        });
 
         clearDragImage();
 
@@ -1912,6 +1895,17 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
 
         {floatingDragCard != null ? (() => {
             const floatingTheme = CARD_THEME[floatingDragCard.card.type];
+            const unitImageStyle: CSSProperties = {
+                position: 'fixed',
+                width: DEFENDER_SPRITE_WIDTH,
+                height: DEFENDER_SPRITE_HEIGHT,
+                transform: `translate3d(${floatingDragCard.pointerX - DEFENDER_SPRITE_WIDTH / 2}px, ${floatingDragCard.pointerY - DEFENDER_SPRITE_HEIGHT}px, 0)`,
+                objectFit: 'cover',
+                pointerEvents: 'none',
+                zIndex: 4900,
+                filter: 'drop-shadow(0 10px 16px rgba(2, 6, 23, 0.6))',
+                opacity: 0.92,
+            };
             const floatingStyle: CSSProperties & Record<string, string | number> = {
                 width: 172,
                 minHeight: 340,
@@ -1931,11 +1925,11 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 color: '#f8fafc',
                 padding: '10px 12px 10px 12px',
                 fontFamily: 'Inter, Arial, sans-serif',
-                position: 'absolute',
+                position: 'fixed',
                 display: 'flex',
                 flexDirection: 'column',
                 justifyContent: 'flex-start',
-                zIndex: 220,
+                zIndex: 5000,
                 transform: `translate3d(${floatingDragCard.x}px, ${floatingDragCard.y}px, 0) rotate(${floatingDragCard.rotation}deg) scale(1.03)`,
                 transition: floatingDragCard.mode === 'returning'
                     ? `transform ${DRAG_CARD_RETURN_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`
@@ -1944,9 +1938,16 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 overflow: 'hidden',
             };
 
-            return <div style={floatingStyle}>
-                {renderCardInner(floatingDragCard.card, floatingTheme)}
-            </div>;
+            return <>
+                {floatingDragCard.mode === 'dragging' ? <img
+                    src={floatingDragCard.card.imageUrl}
+                    alt={floatingDragCard.card.name}
+                    style={unitImageStyle}
+                /> : null}
+                <div style={floatingStyle}>
+                    {renderCardInner(floatingDragCard.card, floatingTheme)}
+                </div>
+            </>;
         })() : null}
 
         {isOpeningPack ? <UnitPackOpening

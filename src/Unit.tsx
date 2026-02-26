@@ -477,21 +477,21 @@ export async function loadReserveUnitTemplate(data: any, stage: Stage): Promise<
             prompt: `{{messages}}This is a preparatory request for generating an image prompt based on a character description. ` +
                 `The character description is intended to be used for generating a portrait image of a character in a tower-defense strategy game. ` +
                 `The description may include details about the character's physical appearance, attire, and distinguishing features. ` +
-                `Your task is to analyze the provided character description and extract key visual elements that can be used to create a concise and effective image prompt for an AI image generator. ` +
+                `Your task is to analyze the provided character description and extract the most critical visual elements that can be used to create a concise and effective image prompt for an AI image generator. ` +
                 `Focus on identifying specific attributes such as clothing style, color scheme, accessories, facial features, and any unique characteristics mentioned in the description. ` +
-                `The output should be a bullet-pointed list of these key visual elements that can guide the creation of the character's portrait. ` +
-                `Focus on listing details that are a departure from the default description: ${coreDescription}. Typically, skin tone, hair color, eye color, and clothing.\n\n` +
+                `The output should be a bullet-pointed list of these key visual elements that can guide adjustments to the character's portrait. ` +
                 `Character Physical Description:\n${parsedData['description'] || ''}\n\n` +
+                `List clear, visible attributes that are a departure from the default description: ${coreDescription}. Typically: skin tone, hair color, eye color, and clothing.\n\n` +
                 `Example Output:\n` +
                 `- Tanned skin\n` +
                 `- Dark hair\n` +
                 `- Golden eyes\n` +
                 `- Flowing dark leather armor\n` +
-                `- Combat boots\n` +
+                `- Heeled leather boots\n` +
                 `#END#`,
             stop: ['#END'],
             include_history: true,
-            max_tokens: 150,
+            max_tokens: 50,
         }),
         stage.generator.textGen({
             prompt: `{{messages}}This is a follow-up request for short in-game situational character voice lines.` +
