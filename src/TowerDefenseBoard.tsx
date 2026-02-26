@@ -15,12 +15,14 @@ type Enemy = {
     sprite: Sprite;
     row: number;
     col: number;
+    moveFromCol: number;
+    moveToCol: number;
+    moveProgress: number;
     attack: number;
     hp: number;
     maxHp: number;
     lastHitByDefenderId: string | null;
-    healthBarBg: Graphics;
-    healthBar: Graphics;
+    healthPips: Graphics;
 };
 
 type Defender = {
@@ -33,11 +35,10 @@ type Defender = {
     maxHp: number;
     shield: number;
     maxShield: number;
-    shieldRechargeTimer: number;
+    wasAttackedThisTurn: boolean;
+    healthPips: Graphics;
+    shieldPips: Graphics | null;
     shieldCircle: Graphics | null;
-    shieldBarBg: Graphics | null;
-    shieldBar: Graphics | null;
-    cooldown: number;
     rangeCircle: Graphics | null;
     rangeCone: Graphics | null;
 };
@@ -57,22 +58,18 @@ type BoardApi = {
 };
 
 
-const MELEE_RANGE = 88;
-const RANGED_CONE_RANGE = 500;
-const RANGED_CONE_HALF_ANGLE = 0.28;
-const MAGIC_RANGE = 280;
-const ENEMY_MAGNET_RADIUS = 220;
-const ENEMY_MAGNET_PULL = 0.22;
-const ENEMY_MAX_VERTICAL_DRIFT = 0.32;
 const DEFENDER_SPRITE_WIDTH = 200;
 const DEFENDER_SPRITE_HEIGHT = 300;
-const DEFENDER_HALF_WIDTH = DEFENDER_SPRITE_WIDTH / 2;
-const DEFENDER_BAR_Y_OFFSET = DEFENDER_SPRITE_HEIGHT + 18;
 const KILL_LINE_CHANCE = 0.28;
 const VOICE_LINE_MIN_GAP_MS = 1000;
 const PACK_SIZE = 3;
 const GRID_ROWS = 5;
 const TURN_INTERVAL_MS = 1000;
+const GRID_HEIGHT_RATIO = 0.66;
+const GRID_TILE_MIN = 60;
+const GRID_TILE_MAX = 120;
+const GRID_UPWARD_SHIFT_RATIO = 0.08;
+const ENEMY_MOVE_DURATION_RATIO = 0.78;
 
 const CARD_THEME: Record<Unit['type'], {
     accent: string;
@@ -445,16 +442,42 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 return Math.max(min, Math.min(max, value));
             };
 
+            const drawHeartPip = (graphic: Graphics, x: number, y: number, size: number, color: number, alpha = 1): void => {
+                const top = size * 0.14;
+                const radius = size * 0.26;
+                graphic.circle(x - radius, y + top, radius);
+                graphic.circle(x + radius, y + top, radius);
+                graphic.moveTo(x - size * 0.52, y + top + size * 0.06);
+                graphic.lineTo(x + size * 0.52, y + top + size * 0.06);
+                graphic.lineTo(x, y + size * 0.92);
+                graphic.closePath();
+                graphic.fill({color, alpha});
+            };
+
+            const drawShieldPip = (graphic: Graphics, x: number, y: number, size: number, color: number, alpha = 1): void => {
+                const half = size / 2;
+                graphic.moveTo(x, y - half);
+                graphic.lineTo(x + half * 0.72, y - half * 0.52);
+                graphic.lineTo(x + half * 0.64, y + half * 0.42);
+                graphic.lineTo(x, y + half);
+                graphic.lineTo(x - half * 0.64, y + half * 0.42);
+                graphic.lineTo(x - half * 0.72, y - half * 0.52);
+                graphic.closePath();
+                graphic.fill({color, alpha});
+            };
+
             const updateGridMetrics = (): void => {
-                const availableHeight = app.renderer.height * 0.62;
+                const availableHeight = app.renderer.height * GRID_HEIGHT_RATIO;
                 const desiredTile = Math.floor(availableHeight / GRID_ROWS);
-                gridTileSize = clamp(desiredTile, 56, 112);
+                gridTileSize = clamp(desiredTile, GRID_TILE_MIN, GRID_TILE_MAX);
                 gridCols = Math.max(8, Math.floor((app.renderer.width * 0.72) / gridTileSize));
 
                 const gridWidth = gridCols * gridTileSize;
                 const gridHeight = GRID_ROWS * gridTileSize;
                 gridLeft = Math.floor((app.renderer.width - gridWidth) / 2);
-                gridTop = Math.floor((app.renderer.height - gridHeight) / 2);
+                const centeredTop = Math.floor((app.renderer.height - gridHeight) / 2);
+                const upwardShift = Math.floor(app.renderer.height * GRID_UPWARD_SHIFT_RATIO);
+                gridTop = Math.max(16, centeredTop - upwardShift);
             };
 
             const drawGrid = (): void => {
@@ -530,23 +553,38 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
             };
 
             const syncEnemyVisual = (enemy: Enemy): void => {
-                const center = getTileCenter(enemy.row, enemy.col);
+                const interpolatedCol = enemy.moveFromCol + ((enemy.moveToCol - enemy.moveFromCol) * enemy.moveProgress);
+                const center = getTileCenter(enemy.row, interpolatedCol);
                 enemy.sprite.x = center.x;
                 enemy.sprite.y = center.y;
             };
 
-            const updateEnemyBar = (enemy: Enemy): void => {
-                const width = Math.max(24, gridTileSize * 0.66);
-                const height = 5;
-                const ratio = Math.max(0, enemy.hp / enemy.maxHp);
+            const stopEnemyMovement = (enemy: Enemy): void => {
+                enemy.moveFromCol = enemy.col;
+                enemy.moveToCol = enemy.col;
+                enemy.moveProgress = 1;
+            };
 
-                enemy.healthBarBg.clear();
-                enemy.healthBarBg.rect(enemy.sprite.x - width / 2, enemy.sprite.y - gridTileSize * 0.42, width, height);
-                enemy.healthBarBg.fill({color: 0x111827, alpha: 0.75});
+            const beginEnemyMovement = (enemy: Enemy, fromCol: number, toCol: number): void => {
+                enemy.moveFromCol = fromCol;
+                enemy.moveToCol = toCol;
+                enemy.moveProgress = 0;
+            };
 
-                enemy.healthBar.clear();
-                enemy.healthBar.rect(enemy.sprite.x - width / 2, enemy.sprite.y - gridTileSize * 0.42, width * ratio, height);
-                enemy.healthBar.fill({color: 0x22c55e, alpha: 0.95});
+            const updateEnemyPips = (enemy: Enemy): void => {
+                enemy.healthPips.clear();
+                const maxPips = Math.max(1, Math.round(enemy.maxHp));
+                const currentPips = Math.max(0, Math.round(enemy.hp));
+                const pipSize = Math.max(6, Math.min(12, gridTileSize * 0.13));
+                const spacing = pipSize + 3;
+                const totalWidth = (maxPips - 1) * spacing;
+                const startX = enemy.sprite.x - totalWidth / 2;
+                const y = enemy.sprite.y + gridTileSize * 0.42;
+
+                for (let index = 0; index < maxPips; index += 1) {
+                    const isFilled = index < currentPips;
+                    drawHeartPip(enemy.healthPips, startX + index * spacing, y, pipSize, 0xfb7185, isFilled ? 0.98 : 0.24);
+                }
             };
 
             const spawnEnemyAtRightEdge = (): void => {
@@ -573,36 +611,36 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 sprite.height = gridTileSize * 0.62;
                 sprite.tint = 0xef4444;
 
-                const healthBarBg = new Graphics();
-                const healthBar = new Graphics();
+                const healthPips = new Graphics();
 
                 enemyLayer.addChild(sprite);
-                enemyLayer.addChild(healthBarBg);
-                enemyLayer.addChild(healthBar);
+                enemyLayer.addChild(healthPips);
 
                 const enemy: Enemy = {
                     id: `enemy-${enemyCounter++}`,
                     row,
                     col: spawnCol,
+                    moveFromCol: spawnCol,
+                    moveToCol: spawnCol,
+                    moveProgress: 1,
                     sprite,
-                    attack: 10,
-                    hp: 110,
-                    maxHp: 110,
+                    attack: 2,
+                    hp: 6,
+                    maxHp: 6,
                     lastHitByDefenderId: null,
-                    healthBarBg,
-                    healthBar,
+                    healthPips,
                 };
 
                 enemies.push(enemy);
                 syncEnemyVisual(enemy);
-                updateEnemyBar(enemy);
+                updateEnemyPips(enemy);
             };
 
             const spawnDefender = (card: Unit, row: number, col: number): void => {
                 const sprite = new Sprite(enemyTexture);
                 sprite.anchor.set(0.5, 1);
-                sprite.width = gridTileSize * 0.86;
-                sprite.height = gridTileSize * 1.15;
+                sprite.width = gridTileSize;
+                sprite.height = gridTileSize * 1.28;
                 sprite.eventMode = 'none';
 
                 void Assets.load(card.imageUrl)
@@ -636,8 +674,8 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 let rangeCircle: Graphics | null = null;
                 let rangeCone: Graphics | null = null;
                 let shieldCircle: Graphics | null = null;
-                let shieldBarBg: Graphics | null = null;
-                let shieldBar: Graphics | null = null;
+                let shieldPips: Graphics | null = null;
+                const healthPips = new Graphics();
 
                 if (card.type === 'melee') {
                     rangeCircle = new Graphics();
@@ -649,10 +687,8 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                     shieldCircle = new Graphics();
                     defenderGroundLayer.addChild(shieldCircle);
 
-                    shieldBarBg = new Graphics();
-                    shieldBar = new Graphics();
-                    defenderLayer.addChild(shieldBarBg);
-                    defenderLayer.addChild(shieldBar);
+                    shieldPips = new Graphics();
+                    defenderLayer.addChild(shieldPips);
                 } else if (card.type === 'ranged') {
                     rangeCone = new Graphics();
                     const rowLength = (gridCols - col) * gridTileSize;
@@ -669,6 +705,7 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 }
 
                 defenderLayer.addChild(sprite);
+                defenderLayer.addChild(healthPips);
                 const defender: Defender = {
                     id: `def-${defenderCounter++}`,
                     card,
@@ -679,11 +716,10 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                     maxHp: card.health,
                     shield: card.shield,
                     maxShield: card.shield,
-                    shieldRechargeTimer: 0,
+                    wasAttackedThisTurn: false,
+                    healthPips,
+                    shieldPips,
                     shieldCircle,
-                    shieldBarBg,
-                    shieldBar,
-                    cooldown: 0,
                     rangeCircle,
                     rangeCone,
                 };
@@ -750,19 +786,19 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 defender.rangeCircle?.destroy();
                 defender.rangeCone?.destroy();
                 defender.shieldCircle?.destroy();
-                defender.shieldBarBg?.destroy();
-                defender.shieldBar?.destroy();
+                defender.healthPips.destroy();
+                defender.shieldPips?.destroy();
                 defenders.splice(index, 1);
             };
 
             const damageDefender = (defender: Defender, amount: number): void => {
+                defender.wasAttackedThisTurn = true;
                 let pendingDamage = amount;
 
                 if (defender.card.type === 'melee' && defender.maxShield > 0) {
                     const absorbed = Math.min(defender.shield, pendingDamage);
                     defender.shield -= absorbed;
                     pendingDamage -= absorbed;
-                    defender.shieldRechargeTimer = 110;
                 }
 
                 if (pendingDamage > 0) {
@@ -770,16 +806,49 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 }
             };
 
-            const updateDefenderShieldVisuals = (deltaTime: number): void => {
+            const updateDefenderPips = (defender: Defender): void => {
+                defender.healthPips.clear();
+                const maxHealthPips = Math.max(1, Math.round(defender.maxHp));
+                const currentHealthPips = Math.max(0, Math.round(defender.hp));
+                const healthPipSize = Math.max(6, Math.min(12, gridTileSize * 0.13));
+                const healthSpacing = healthPipSize + 3;
+                const healthWidth = (maxHealthPips - 1) * healthSpacing;
+                const healthStartX = defender.sprite.x - healthWidth / 2;
+                const healthY = defender.sprite.y + gridTileSize * 0.12;
+
+                for (let index = 0; index < maxHealthPips; index += 1) {
+                    const isFilled = index < currentHealthPips;
+                    drawHeartPip(defender.healthPips, healthStartX + index * healthSpacing, healthY, healthPipSize, 0xfb7185, isFilled ? 0.98 : 0.22);
+                }
+
+                if (defender.shieldPips != null && defender.maxShield > 0) {
+                    defender.shieldPips.clear();
+                    const maxShieldPips = Math.max(1, Math.round(defender.maxShield));
+                    const currentShieldPips = Math.max(0, Math.round(defender.shield));
+                    const shieldPipSize = Math.max(6, Math.min(11, gridTileSize * 0.12));
+                    const shieldSpacing = shieldPipSize + 3;
+                    const shieldWidth = (maxShieldPips - 1) * shieldSpacing;
+                    const shieldStartX = defender.sprite.x - shieldWidth / 2;
+                    const shieldY = healthY + healthPipSize + 5;
+
+                    for (let index = 0; index < maxShieldPips; index += 1) {
+                        const isFilled = index < currentShieldPips;
+                        drawShieldPip(defender.shieldPips, shieldStartX + index * shieldSpacing, shieldY, shieldPipSize, 0x67e8f9, isFilled ? 0.96 : 0.2);
+                    }
+                }
+            };
+
+            const updateDefenderShieldVisuals = (): void => {
                 for (const defender of defenders) {
                     if (defender.card.type !== 'melee' || defender.maxShield <= 0) {
+                        updateDefenderPips(defender);
                         continue;
                     }
 
-                    defender.shieldRechargeTimer = Math.max(0, defender.shieldRechargeTimer - deltaTime);
-                    if (defender.shieldRechargeTimer <= 0 && defender.shield < defender.maxShield) {
-                        defender.shield = Math.min(defender.maxShield, defender.shield + 0.36 * deltaTime);
+                    if (!defender.wasAttackedThisTurn && defender.shield < defender.maxShield) {
+                        defender.shield = Math.min(defender.maxShield, defender.shield + 1);
                     }
+                    defender.wasAttackedThisTurn = false;
 
                     const ratio = Math.max(0, Math.min(1, defender.shield / defender.maxShield));
 
@@ -790,20 +859,7 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                         defender.shieldCircle.stroke({width: 2, color: 0x67e8f9, alpha: 0.25 + ratio * 0.55});
                     }
 
-                    if (defender.shieldBarBg != null && defender.shieldBar != null) {
-                        const barWidth = Math.max(24, gridTileSize * 0.6);
-                        const barHeight = 5;
-                        const left = defender.sprite.x - barWidth / 2;
-                        const top = defender.sprite.y - gridTileSize * 0.98;
-
-                        defender.shieldBarBg.clear();
-                        defender.shieldBarBg.rect(left, top, barWidth, barHeight);
-                        defender.shieldBarBg.fill({color: 0x0f172a, alpha: 0.72});
-
-                        defender.shieldBar.clear();
-                        defender.shieldBar.rect(left, top, barWidth * ratio, barHeight);
-                        defender.shieldBar.fill({color: 0x67e8f9, alpha: 0.9});
-                    }
+                    updateDefenderPips(defender);
                 }
             };
 
@@ -907,18 +963,21 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                         damageDefender(defenderInFront, enemy.attack);
                         createEnemyStrikeEffect(defenderInFront.sprite.x, defenderInFront.sprite.y - gridTileSize * 0.35);
                         enemy.sprite.tint = 0xdc2626;
+                        stopEnemyMovement(enemy);
                         continue;
                     }
 
                     const enemyInFront = getEnemyAt(enemy.row, nextCol, enemy.id);
                     if (enemyInFront != null) {
                         enemy.sprite.tint = 0xef4444;
+                        stopEnemyMovement(enemy);
                         continue;
                     }
 
+                    const currentCol = enemy.col;
                     enemy.col = nextCol;
                     enemy.sprite.tint = 0xef4444;
-                    syncEnemyVisual(enemy);
+                    beginEnemyMovement(enemy, currentCol, nextCol);
                 }
             };
 
@@ -949,8 +1008,7 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                     }
 
                     enemy.sprite.destroy();
-                    enemy.healthBarBg.destroy();
-                    enemy.healthBar.destroy();
+                    enemy.healthPips.destroy();
                     enemies.splice(index, 1);
                 }
 
@@ -988,6 +1046,10 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                     return;
                 }
 
+                for (const defender of defenders) {
+                    defender.wasAttackedThisTurn = false;
+                }
+
                 turnCounter += 1;
 
                 if (enemiesSpawned < totalEnemiesInWave) {
@@ -1006,10 +1068,10 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
 
                 for (const enemy of enemies) {
                     syncEnemyVisual(enemy);
-                    updateEnemyBar(enemy);
+                    updateEnemyPips(enemy);
                 }
 
-                updateDefenderShieldVisuals(60);
+                updateDefenderShieldVisuals();
                 setStatusText(`Turn ${turnCounter} resolved. Enemies remaining: ${enemies.length}.`);
                 finishWaveIfCleared();
             };
@@ -1017,8 +1079,22 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
             const updateBattle = (ticker: {deltaTime: number}): void => {
                 updateEffects();
 
+                const turnFrames = (TURN_INTERVAL_MS / 1000) * 60;
+                const movementFrames = Math.max(1, turnFrames * ENEMY_MOVE_DURATION_RATIO);
                 for (const enemy of enemies) {
-                    updateEnemyBar(enemy);
+                    if (enemy.moveProgress < 1) {
+                        enemy.moveProgress = Math.min(1, enemy.moveProgress + (ticker.deltaTime / movementFrames));
+                    }
+
+                    syncEnemyVisual(enemy);
+                }
+
+                for (const enemy of enemies) {
+                    updateEnemyPips(enemy);
+                }
+
+                for (const defender of defenders) {
+                    updateDefenderPips(defender);
                 }
             };
 
@@ -1085,7 +1161,11 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
 
                 for (const enemy of enemies) {
                     syncEnemyVisual(enemy);
-                    updateEnemyBar(enemy);
+                    updateEnemyPips(enemy);
+                }
+
+                for (const defender of defenders) {
+                    updateDefenderPips(defender);
                 }
             };
 

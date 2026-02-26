@@ -219,9 +219,9 @@ export async function generateUnitTemplateFromFullPath(fullPath: string, stage: 
 }
 
 const DEFAULT_STATS_BY_TYPE: Record<UnitType, Pick<UnitTemplate, 'cost' | 'attack' | 'health' | 'shield'>> = {
-    melee: {cost: 3, attack: 12, health: 90, shield: 44},
-    ranged: {cost: 2, attack: 10, health: 64, shield: 0},
-    magic: {cost: 4, attack: 16, health: 58, shield: 0},
+    melee: {cost: 3, attack: 2, health: 8, shield: 3},
+    ranged: {cost: 2, attack: 2, health: 5, shield: 0},
+    magic: {cost: 4, attack: 3, health: 4, shield: 0},
 };
 
 const DEFAULT_THEME_COLORS = ['#788ebdff', '#d3aa68ff', '#75c275ff', '#c28891ff', '#55bbb2ff'];
@@ -388,9 +388,9 @@ export async function loadReserveUnitTemplate(data: any, stage: Stage): Promise<
             `BODY TYPE: SLIM, AVERAGE, or CURVY, based on their physical description and personality.\n` +
             `HAIR TYPE: SHORT, LONG, or PONYTAIL, based on their physical description and personality.\n` +
             `COST: Integer 1-8 representing deployment cost.\n` +
-            `ATTACK: Integer 1-40 representing offensive power.\n` +
-            `HEALTH: Integer 20-250 representing maximum HP.\n` +
-            `SHIELD: Integer 0-150 representing armor or shield points.\n` +
+            `ATTACK: Integer 1-3 representing offensive power.\n` +
+            `HEALTH: Integer 3-8 representing maximum HP.\n` +
+            `SHIELD: Integer 0-3 representing armor or shield points.\n` +
             `VOICE: Output one specific voice ID from Available Voices that best matches the character.\n` +
             `COLOR: A hex color that reflects the character's theme or mood and contrasts with light text.\n` +
             `DESCRIPTION: A vivid description of the character's physical appearance, attire, and any distinguishing features.\n` +
@@ -403,9 +403,9 @@ export async function loadReserveUnitTemplate(data: any, stage: Stage): Promise<
             `BODY TYPE: AVERAGE\n` +
             `HAIR TYPE: SHORT\n` +
             `COST: 3\n` +
-            `ATTACK: 12\n` +
-            `HEALTH: 90\n` +
-            `SHIELD: 44\n` +
+            `ATTACK: 2\n` +
+            `HEALTH: 8\n` +
+            `SHIELD: 3\n` +
             `VOICE: 03a438b7-ebfa-4f72-9061-f086d8f1fca6\n` +
             `COLOR: #333333\n` +
             `DESCRIPTION: A tall, athletic woman with short, dark hair and piercing blue eyes. She wears a simple, utilitarian outfit made from durable materials.\n` +
@@ -478,9 +478,9 @@ export async function loadReserveUnitTemplate(data: any, stage: Stage): Promise<
         persona: parsedData['profile'] || '',
         flavor: parsedData['flavor'] || '',
         cost: parseStat(parsedData['cost'], defaultStats.cost, 1, 8),
-        attack: parseStat(parsedData['attack'], defaultStats.attack, 1, 40),
-        health: parseStat(parsedData['health'] || parsedData['hp'], defaultStats.health, 20, 250),
-        shield: parseStat(parsedData['shield'] || parsedData['armor'], defaultStats.shield, 0, 150),
+        attack: parseStat(parsedData['attack'], defaultStats.attack, 1, 3),
+        health: parseStat(parsedData['health'] || parsedData['hp'], defaultStats.health, 3, 8),
+        shield: parseStat(parsedData['shield'] || parsedData['armor'], defaultStats.shield, 0, 3),
         voice: parseVoice(parsedData['voice']),
         color: parseColor(parsedData['color']),
         portraitUrl: data.avatar || baseUrl,
