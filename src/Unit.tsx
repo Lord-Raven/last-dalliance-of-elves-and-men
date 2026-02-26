@@ -537,18 +537,24 @@ async function generateUnitImage(unitTemplate: UnitTemplate, stage: Stage): Prom
     console.log(`Generating image for unit ${unitTemplate.name}`);
 
     try {
-        return (await stage.generator.imageToImage(
+        const newImageUrl = (await stage.generator.imageToImage(
             {
                 image: unitTemplate.imageUrl,
                 prompt: `Update this character's outfit and appearance to match this description: ${unitTemplate.description}\n` +
-                `Maintain the current art style and white outline.`,
-                remove_background: true,
+                `Maintain the existing art style and white outline.`,
                 transfer_type: 'edit'
             }))?.url ?? unitTemplate.imageUrl;
+
+        try {
+            const response = await stage.generator.removeBackground({image: newImageUrl});
+            return response?.url ?? unitTemplate.imageUrl;
+        } catch (error) {
+            console.error(`Error removing background`, error);
+        }
     } catch (exception: any) {
         console.error(`Failed to generate image for unit ${unitTemplate.name}:`, exception);
-        return unitTemplate.imageUrl;
     }
+    return unitTemplate.imageUrl;
 }
 
 

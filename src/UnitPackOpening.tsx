@@ -171,8 +171,8 @@ export const UnitPackOpening = ({templates, onComplete}: UnitPackOpeningProps): 
             pointerEvents: 'none',
         }}>
             {phase === 'tear' ? 'Drag the foil corner across the edge to tear the pack open.' : null}
-            {phase === 'reveal' ? 'New templates discovered...' : null}
-            {phase === 'ready' ? 'Pack opened. Click anywhere to add these cards to reserve.' : null}
+            {phase === 'reveal' ? 'Reserve units revealed...' : null}
+            {phase === 'ready' ? 'Pack opened. Click anywhere to continue.' : null}
         </div>
 
         <div style={{

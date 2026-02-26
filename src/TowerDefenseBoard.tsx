@@ -1120,33 +1120,32 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
         }
 
         setIsGeneratingPack(true);
-        setStatusText('Generating a fresh foil pack...');
+        setStatusText('Preparing a foil pack from reserve...');
 
         try {
-            const generatedTemplates = await stage.generatePackTemplates(PACK_SIZE);
-            if (generatedTemplates.length === 0) {
-                setStatusText('Pack generation failed. Try opening another pack.');
+            const revealedTemplates = await stage.generatePackTemplates(PACK_SIZE);
+            if (revealedTemplates.length === 0) {
+                setStatusText('Reserve still loading. Try opening a pack again in a moment.');
                 return;
             }
 
-            setPackTemplates(generatedTemplates);
+            setPackTemplates(revealedTemplates);
             setIsOpeningPack(true);
-            setStatusText('Tear the sleeve to reveal your new templates.');
+            setStatusText('Tear the sleeve to reveal reserve units.');
         } catch (error) {
             console.error('Failed to open pack', error);
-            setStatusText('Pack generation hit an error. Please try again.');
+            setStatusText('Pack opening hit an error. Please try again.');
         } finally {
             setIsGeneratingPack(false);
         }
     };
 
     const handlePackComplete = (): void => {
-        stage.addTemplatesToReserve(packTemplates);
-        const insertedCount = packTemplates.length;
+        const revealedCount = packTemplates.length;
         setPackTemplates([]);
         setIsOpeningPack(false);
-        setStatusText(insertedCount > 0
-            ? `Added ${insertedCount} new template cards to reserve.`
+        setStatusText(revealedCount > 0
+            ? `Revealed ${revealedCount} reserve units.`
             : 'Pack closed.');
     };
 

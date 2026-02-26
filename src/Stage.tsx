@@ -92,8 +92,27 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
             return [];
         }
 
-        const drawnTemplates = this.reserveUnitTemplates.splice(0, size);
+        const drawnTemplates = this.sampleReserveTemplates(size);
         return unitsFromTemplates(drawnTemplates);
+    }
+
+    private sampleReserveTemplates(size: number): UnitTemplate[] {
+        if (size <= 0 || this.reserveUnitTemplates.length === 0) {
+            return [];
+        }
+
+        const available = this.reserveUnitTemplates;
+        const sampleCount = Math.min(size, available.length);
+        const indices = available.map((_, index) => index);
+
+        for (let index = indices.length - 1; index > 0; index -= 1) {
+            const swapWith = Math.floor(Math.random() * (index + 1));
+            const temp = indices[index];
+            indices[index] = indices[swapWith];
+            indices[swapWith] = temp;
+        }
+
+        return indices.slice(0, sampleCount).map((index) => available[index]);
     }
 
     addTemplatesToReserve(templates: ReadonlyArray<UnitTemplate>): void {
@@ -110,27 +129,7 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
             return [];
         }
 
-        const packTasks: Array<Promise<UnitTemplate | null>> = [];
-        for (let index = 0; index < size; index += 1) {
-            packTasks.push(this.generateTemplateForPack());
-        }
-
-        const templates = await Promise.all(packTasks);
-        return templates.filter((template): template is UnitTemplate => template != null);
-    }
-
-    private async generateTemplateForPack(): Promise<UnitTemplate | null> {
-        const randomPath = DEMO_FULL_PATHS[Math.floor(Math.random() * DEMO_FULL_PATHS.length)];
-        if (!randomPath) {
-            return null;
-        }
-
-        try {
-            return await generateUnitTemplateFromFullPath(randomPath, this);
-        } catch (error) {
-            console.error(`Failed generating pack template for ${randomPath}`, error);
-            return null;
-        }
+        return this.sampleReserveTemplates(size);
     }
 
     async load(): Promise<Partial<LoadResponse<InitStateType, ChatStateType, MessageStateType>>> {
