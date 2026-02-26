@@ -481,17 +481,25 @@ export async function loadReserveUnitTemplate(data: any, stage: Stage): Promise<
                 `Focus on identifying obvious elements such as clothing, colors, and accessories. ` +
                 `The output should be a bullet-pointed list of these key visual elements that can guide adjustments to the character's portrait. ` +
                 `Character Physical Description:\n${parsedData['description'] || ''}\n\n` +
-                `List clear, objectively apparent attributes that are a departure from the default description: ${coreDescription}. Typically: skin tone, hair color, eye color, and clothing items.\n\n` +
+                `List simple, objectively apparent attributes that are a departure from the default description: ${coreDescription}. Typically: skin tone, hair color, eye color, and clothing items.\n` +
+                `End the list with #END# and then offer explanations for the bulletpoints.\n\n` +
                 `Example Output:\n` +
                 `- Tanned skin\n` +
                 `- Dark hair\n` +
                 `- Golden eyes\n` +
                 `- Flowing dark leather armor\n` +
                 `- Heeled leather boots\n` +
+                `#END#\n\n` +
+                `Example Output:\n` +
+                `- Dark gray skin\n` +
+                `- Short white hair\n` +
+                `- Bright red eyes\n` +
+                `- Tattered gray robes\n` +
+                `- Stiletto heels\n` +
                 `#END#`,
             stop: ['#END'],
             include_history: true,
-            max_tokens: 50,
+            max_tokens: 100,
         }),
         stage.generator.textGen({
             prompt: `{{messages}}This is a follow-up request for short in-game situational character voice lines.` +

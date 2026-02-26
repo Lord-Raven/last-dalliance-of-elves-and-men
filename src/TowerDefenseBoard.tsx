@@ -1,15 +1,11 @@
 import {CSSProperties, ReactElement, useEffect, useMemo, useRef, useState} from "react";
 import {createPortal} from "react-dom";
+import {motion} from "framer-motion";
 import {Application, Assets, Container, Graphics, Sprite, Text, TextStyle, TilingSprite, Texture} from "pixi.js";
 import {Unit, UnitTemplate} from "./Unit";
 import type {Stage} from "./Stage";
 import {UnitPackOpening} from "./UnitPackOpening";
-import PaidRoundedIcon from '@mui/icons-material/PaidRounded';
-import FavoriteRoundedIcon from '@mui/icons-material/FavoriteRounded';
-import ShieldRoundedIcon from '@mui/icons-material/ShieldRounded';
-import GavelRoundedIcon from '@mui/icons-material/GavelRounded';
-import TrackChangesRoundedIcon from '@mui/icons-material/TrackChangesRounded';
-import AutoFixHighRoundedIcon from '@mui/icons-material/AutoFixHighRounded';
+import {CARD_THEME, UnitCardFace} from "./UnitCardFace";
 
 type Enemy = {
     id: string;
@@ -68,6 +64,9 @@ type FloatingDragCard = {
     mode: 'dragging' | 'returning';
 };
 
+type ActivePointerDrag = {
+    cardId: string;
+};
 
 const DEFENDER_SPRITE_WIDTH = 200;
 const DEFENDER_SPRITE_HEIGHT = 300;
@@ -86,53 +85,15 @@ const HAND_FAN_VERTICAL_OFFSET = 5;
 const DRAG_CARD_RETURN_MS = 260;
 const DRAG_CURSOR_OFFSET_X = 30;
 const DRAG_CURSOR_OFFSET_Y = -24;
-const TRANSPARENT_DRAG_PIXEL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
-
-const CARD_THEME: Record<Unit['type'], {
-    accent: string;
-    accentSoft: string;
-    attackLabel: string;
-    flavor: string;
-}> = {
-    melee: {
-        accent: '#34d399',
-        accentSoft: 'rgba(52, 211, 153, 0.2)',
-        attackLabel: 'Blade',
-        flavor: 'A living bulwark of bark and steel.',
-    },
-    ranged: {
-        accent: '#60a5fa',
-        accentSoft: 'rgba(96, 165, 250, 0.2)',
-        attackLabel: 'Arrow',
-        flavor: 'Wind-guided volleys from the treeline.',
-    },
-    magic: {
-        accent: '#c084fc',
-        accentSoft: 'rgba(192, 132, 252, 0.2)',
-        attackLabel: 'Arcana',
-        flavor: 'Moonlit runes hum with ancient power.',
-    },
-};
-
-const getAttackIcon = (type: Unit['type']): ReactElement => {
-    if (type === 'melee') {
-        return <GavelRoundedIcon style={{fontSize: 14}}/>;
-    }
-
-    if (type === 'ranged') {
-        return <TrackChangesRoundedIcon style={{fontSize: 14}}/>;
-    }
-
-    return <AutoFixHighRoundedIcon style={{fontSize: 14}}/>;
-};
 
 export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
     const boardRootRef = useRef<HTMLDivElement>(null);
     const stageRef = useRef<HTMLDivElement>(null);
     const boardApiRef = useRef<BoardApi | null>(null);
-    const dragImageRef = useRef<HTMLImageElement | null>(null);
+    const activePointerDragRef = useRef<ActivePointerDrag | null>(null);
+    const pointerMoveListenerRef = useRef<((event: PointerEvent) => void) | null>(null);
+    const pointerUpListenerRef = useRef<((event: PointerEvent) => void) | null>(null);
     const dragReturnTimeoutRef = useRef<number | null>(null);
-    const dropHandledRef = useRef<boolean>(false);
     const [isWaveRunning, setIsWaveRunning] = useState<boolean>(false);
     const [gold, setGold] = useState<number>(14);
     const [hand, setHand] = useState<Unit[]>(() => stage.drawUnitsFromReserve(6));
@@ -1297,7 +1258,7 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 window.clearInterval(turnIntervalId);
             }
 
-            clearDragImage();
+            clearPointerListeners();
 
             if (activeVoiceAudioRef.current != null) {
                 activeVoiceAudioRef.current.pause();
@@ -1355,10 +1316,15 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
             : 'Pack closed.');
     };
 
-    const clearDragImage = (): void => {
-        if (dragImageRef.current != null) {
-            dragImageRef.current.remove();
-            dragImageRef.current = null;
+    const clearPointerListeners = (): void => {
+        if (pointerMoveListenerRef.current != null) {
+            window.removeEventListener('pointermove', pointerMoveListenerRef.current);
+            pointerMoveListenerRef.current = null;
+        }
+
+        if (pointerUpListenerRef.current != null) {
+            window.removeEventListener('pointerup', pointerUpListenerRef.current);
+            pointerUpListenerRef.current = null;
         }
     };
 
@@ -1376,7 +1342,24 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
         };
     };
 
-    const updateFloatingCardFromPointer = (clientX: number, clientY: number): void => {
+    const updatePlacementPreviewForDrag = (card: Unit, clientX: number, clientY: number): void => {
+        if (interactionLocked) {
+            boardApiRef.current?.clearPlacementPreview();
+            return;
+        }
+
+        const stageBounds = stageRef.current?.getBoundingClientRect();
+        if (stageBounds == null) {
+            boardApiRef.current?.clearPlacementPreview();
+            return;
+        }
+
+        const x = clientX - stageBounds.left;
+        const y = clientY - stageBounds.top;
+        boardApiRef.current?.updatePlacementPreview(card, x, y);
+    };
+
+    const updateFloatingCardFromPointer = (card: Unit, clientX: number, clientY: number): void => {
         const position = getFloatingCardHoverPosition(clientX, clientY);
 
         setFloatingDragCard((current) => {
@@ -1392,22 +1375,9 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 pointerY: clientY,
             };
         });
+
+        updatePlacementPreviewForDrag(card, clientX, clientY);
     };
-
-    useEffect(() => {
-        if (draggingCardId == null) {
-            return;
-        }
-
-        const handleWindowDragOver = (event: DragEvent): void => {
-            updateFloatingCardFromPointer(event.clientX, event.clientY);
-        };
-
-        window.addEventListener('dragover', handleWindowDragOver);
-        return () => {
-            window.removeEventListener('dragover', handleWindowDragOver);
-        };
-    }, [draggingCardId]);
 
     const animateFloatingCardBackToHand = (): void => {
         clearDragReturnTimeout();
@@ -1431,7 +1401,8 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
     };
 
     const resetCardDragState = (options?: {animateBack?: boolean}): void => {
-        clearDragImage();
+        clearPointerListeners();
+        activePointerDragRef.current = null;
         setDraggingCardId(null);
         boardApiRef.current?.clearPlacementPreview();
 
@@ -1444,16 +1415,69 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
         setFloatingDragCard(null);
     };
 
-    const handleCardDragStart = (event: React.DragEvent<HTMLDivElement>, card: Unit): void => {
-        dropHandledRef.current = false;
-        event.dataTransfer.setData('application/x-elf-card', card.id);
+    const tryPlaceDraggedCard = (card: Unit, clientX: number, clientY: number): boolean => {
+        const stageBounds = stageRef.current?.getBoundingClientRect();
+        if (stageBounds == null) {
+            return false;
+        }
+
+        const x = clientX - stageBounds.left;
+        const y = clientY - stageBounds.top;
+        return boardApiRef.current?.placeDefender(card, x, y) ?? false;
+    };
+
+    const finalizeCardPointerDrag = (card: Unit, clientX: number, clientY: number): void => {
+        if (interactionLocked) {
+            resetCardDragState({animateBack: true});
+            setStatusText('Cannot deploy while gameplay is paused.');
+            return;
+        }
+
+        if (gold < card.cost) {
+            resetCardDragState({animateBack: true});
+            setStatusText(`Not enough gold for ${card.name}. Need ${card.cost}.`);
+            return;
+        }
+
+        const placed = tryPlaceDraggedCard(card, clientX, clientY);
+
+        if (!placed) {
+            resetCardDragState({animateBack: true});
+            setStatusText('Cannot place here. Move to an open battlefield position.');
+            return;
+        }
+
+        resetCardDragState();
+
+        setGold((current) => current - card.cost);
+        setHand((current) => {
+            const remaining = current.filter((candidate) => candidate.id !== card.id);
+            const refill = stage.drawUnitsFromReserve(6 - remaining.length);
+            return [...remaining, ...refill];
+        });
+        setStatusText(`Placed ${card.name}.`);
+        playVoiceLine(card.deployLineUrl);
+    };
+
+    const handleCardPointerStart = (
+        event: React.PointerEvent<HTMLDivElement>,
+        card: Unit,
+        fanRotate: number,
+    ): void => {
+        if (event.pointerType === 'mouse' && event.button !== 0) {
+            return;
+        }
+
+        if (interactionLocked || gold < card.cost) {
+            return;
+        }
+
+        event.preventDefault();
+
         setDraggingCardId(card.id);
+        activePointerDragRef.current = {cardId: card.id};
 
         const cardBounds = event.currentTarget.getBoundingClientRect();
-        const centerIndex = (hand.length - 1) / 2;
-        const cardIndex = hand.findIndex((candidate) => candidate.id === card.id);
-        const fanOffset = cardIndex - centerIndex;
-        const fanRotate = fanOffset * HAND_FAN_ROTATION_DEGREES;
         const hoverPosition = getFloatingCardHoverPosition(event.clientX, event.clientY);
 
         const startX = cardBounds.left;
@@ -1470,261 +1494,42 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
             mode: 'dragging',
         });
 
-        clearDragImage();
+        updatePlacementPreviewForDrag(card, event.clientX, event.clientY);
 
-        const dragImage = document.createElement('img');
-        dragImage.src = TRANSPARENT_DRAG_PIXEL;
-        dragImage.alt = card.name;
-        dragImage.width = 1;
-        dragImage.height = 1;
-        dragImage.style.position = 'fixed';
-        dragImage.style.top = '-10000px';
-        dragImage.style.left = '-10000px';
-        dragImage.style.width = '1px';
-        dragImage.style.height = '1px';
-        dragImage.style.pointerEvents = 'none';
+        clearPointerListeners();
 
-        document.body.appendChild(dragImage);
-        dragImageRef.current = dragImage;
-        event.dataTransfer.setDragImage(dragImage, 0, 0);
-    };
+        const onPointerMove = (moveEvent: PointerEvent): void => {
+            if (activePointerDragRef.current?.cardId !== card.id) {
+                return;
+            }
 
-    const handleDrop = (event: React.DragEvent<HTMLDivElement>): void => {
-        event.preventDefault();
-        dropHandledRef.current = true;
-
-        if (interactionLocked) {
-            resetCardDragState({animateBack: true});
-            setStatusText('Cannot deploy while gameplay is paused.');
-            return;
-        }
-
-        const payload = event.dataTransfer.getData('application/x-elf-card');
-        if (!payload) {
-            resetCardDragState({animateBack: true});
-            return;
-        }
-
-        const droppedCard = hand.find((card) => card.id === payload);
-        if (droppedCard == null) {
-            resetCardDragState({animateBack: true});
-            return;
-        }
-
-        if (gold < droppedCard.cost) {
-            resetCardDragState({animateBack: true});
-            setStatusText(`Not enough gold for ${droppedCard.name}. Need ${droppedCard.cost}.`);
-            return;
-        }
-
-        const stageBounds = stageRef.current?.getBoundingClientRect();
-        if (stageBounds == null) {
-            resetCardDragState({animateBack: true});
-            return;
-        }
-
-        const x = event.clientX - stageBounds.left;
-        const y = event.clientY - stageBounds.top;
-        const placed = boardApiRef.current?.placeDefender(droppedCard, x, y) ?? false;
-
-        if (!placed) {
-            resetCardDragState({animateBack: true});
-            setStatusText('Cannot place here. Move to an open battlefield position.');
-            return;
-        }
-
-        resetCardDragState();
-
-        setGold((current) => current - droppedCard.cost);
-        setHand((current) => {
-            const remaining = current.filter((card) => card.id !== droppedCard.id);
-            const refill = stage.drawUnitsFromReserve(6 - remaining.length);
-            return [...remaining, ...refill];
-        });
-        setStatusText(`Placed ${droppedCard.name}.`);
-        playVoiceLine(droppedCard.deployLineUrl);
-    };
-
-    const renderCardInner = (card: Unit, theme: typeof CARD_THEME[Unit['type']]): ReactElement => {
-        const statCapsuleBase: CSSProperties = {
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 4,
-            minWidth: 40,
-            borderRadius: 999,
-            padding: '3px 7px',
-            background: 'rgba(15, 23, 42, 0.92)',
-            border: `1px solid ${theme.accent}`,
-            boxShadow: '0 2px 8px rgba(2, 6, 23, 0.4)',
-            fontSize: 12,
-            fontWeight: 700,
-            letterSpacing: 0.2,
+            updateFloatingCardFromPointer(card, moveEvent.clientX, moveEvent.clientY);
         };
 
-        return <>
-            <div style={{
-                position: 'absolute',
-                inset: 0,
-                backgroundImage: `url(${card.imageUrl})`,
-                backgroundPosition: 'center 30%',
-                backgroundSize: 'cover',
-                backgroundRepeat: 'no-repeat',
-                opacity: 0.16,
-                filter: 'saturate(0.95)',
-                pointerEvents: 'none',
-            }}/>
+        const onPointerUp = (upEvent: PointerEvent): void => {
+            if (activePointerDragRef.current?.cardId !== card.id) {
+                return;
+            }
 
-            <div style={{
-                position: 'absolute',
-                top: 12,
-                left: 10,
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 3,
-                background: 'rgba(15, 23, 42, 0.92)',
-                border: `1px solid ${theme.accent}`,
-                borderRadius: 999,
-                padding: '3px 7px',
-                boxShadow: '0 2px 8px rgba(2, 6, 23, 0.4)',
-                color: '#fef9c3',
-                fontSize: 12,
-                fontWeight: 700,
-                letterSpacing: 0.2,
-                zIndex: 2,
-            }}>
-                <PaidRoundedIcon style={{fontSize: 13}}/>
-                {card.cost}
-            </div>
+            finalizeCardPointerDrag(card, upEvent.clientX, upEvent.clientY);
+        };
 
-            <div style={{
-                position: 'absolute',
-                top: 12,
-                right: 10,
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 5,
-                zIndex: 2,
-            }}>
-                <div style={{
-                    ...statCapsuleBase,
-                    color: '#fde68a',
-                }}>
-                    {getAttackIcon(card.type)}
-                    <span>{card.attack}</span>
-                </div>
-                <div style={{
-                    ...statCapsuleBase,
-                    color: '#fecaca',
-                }}>
-                    <FavoriteRoundedIcon style={{fontSize: 14}}/>
-                    <span>{card.health}</span>
-                </div>
-                {card.shield > 0 ? <div style={{
-                    ...statCapsuleBase,
-                    color: '#bae6fd',
-                }}>
-                    <ShieldRoundedIcon style={{fontSize: 14}}/>
-                    <span>{card.shield}</span>
-                </div> : null}
-            </div>
+        pointerMoveListenerRef.current = onPointerMove;
+        pointerUpListenerRef.current = onPointerUp;
 
-            <div style={{
-                width: '90%',
-                marginLeft: '5%',
-                height: 186,
-                borderRadius: 10,
-                backgroundImage: `url(${card.portraitUrl})`,
-                backgroundPosition: 'center 20%',
-                backgroundSize: 'cover',
-                border: `1px solid ${theme.accent}`,
-                marginBottom: 10,
-                position: 'relative',
-                zIndex: 1,
-            }}/>
-            <div style={{
-                fontSize: 15,
-                fontWeight: 700,
-                lineHeight: 1.1,
-                marginBottom: 6,
-                fontFamily: 'Georgia, Times New Roman, serif',
-                textShadow: '0 1px 8px rgba(15, 23, 42, 0.75)',
-                position: 'relative',
-                zIndex: 1,
-            }}>
-                {card.name}
-            </div>
-
-            <div style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                marginBottom: 8,
-                fontSize: 11,
-                fontWeight: 600,
-                color: '#e2e8f0',
-                textTransform: 'uppercase',
-                letterSpacing: 0.6,
-                position: 'relative',
-                zIndex: 1,
-            }}>
-                <span style={{
-                    borderRadius: 999,
-                    border: `1px solid ${theme.accent}`,
-                    color: theme.accent,
-                    padding: '2px 6px',
-                    background: 'rgba(2, 6, 23, 0.5)',
-                }}>
-                    {card.type}
-                </span>
-                <span>{theme.attackLabel}</span>
-            </div>
-
-            <div style={{
-                marginTop: 'auto',
-                borderTop: `1px solid ${theme.accentSoft}`,
-                paddingTop: 8,
-                minHeight: 38,
-                fontSize: 11,
-                color: '#cbd5e1',
-                lineHeight: 1.35,
-                fontStyle: 'italic',
-                position: 'relative',
-                zIndex: 1,
-            }}>
-                {card.flavor || theme.flavor}
-            </div>
-        </>;
+        window.addEventListener('pointermove', onPointerMove);
+        window.addEventListener('pointerup', onPointerUp);
     };
+
+    useEffect(() => {
+        return () => {
+            clearPointerListeners();
+        };
+    }, []);
 
     return <div
         ref={boardRootRef}
         style={{position: 'relative', width: '100%', height: '100%'}}
-        onDragOver={(event) => {
-            event.preventDefault();
-
-            if (interactionLocked || draggingCardId == null) {
-                boardApiRef.current?.clearPlacementPreview();
-                return;
-            }
-
-            updateFloatingCardFromPointer(event.clientX, event.clientY);
-
-            const draggedCard = hand.find((card) => card.id === draggingCardId);
-            const stageBounds = stageRef.current?.getBoundingClientRect();
-            if (draggedCard == null || stageBounds == null) {
-                boardApiRef.current?.clearPlacementPreview();
-                return;
-            }
-
-            const x = event.clientX - stageBounds.left;
-            const y = event.clientY - stageBounds.top;
-            boardApiRef.current?.updatePlacementPreview(draggedCard, x, y);
-        }}
-        onDragLeave={() => {
-            boardApiRef.current?.clearPlacementPreview();
-        }}
-        onDrop={handleDrop}
     >
         <div ref={stageRef} style={{width: '100%', height: '100%'}}/>
 
@@ -1862,6 +1667,8 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                     fontFamily: 'Inter, Arial, sans-serif',
                     cursor: affordable ? 'grab' : 'not-allowed',
                     opacity: isFloatingCard ? 0 : (affordable ? 1 : 0.7),
+                    userSelect: 'none',
+                    touchAction: 'none',
                     position: 'relative',
                     display: 'flex',
                     flexDirection: 'column',
@@ -1878,29 +1685,12 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 };
                 return <div
                     key={card.id}
-                    draggable={!interactionLocked && affordable}
-                    onDragStart={(event) => handleCardDragStart(event, card)}
-                    onDrag={(event) => {
-                        if (draggingCardId !== card.id) {
-                            return;
-                        }
-
-                        if (event.clientX === 0 && event.clientY === 0) {
-                            return;
-                        }
-
-                        updateFloatingCardFromPointer(event.clientX, event.clientY);
-                    }}
-                    onDragEnd={() => {
-                        if (!dropHandledRef.current) {
-                            resetCardDragState({animateBack: true});
-                        }
-
-                        dropHandledRef.current = false;
+                    onPointerDown={(event) => {
+                        handleCardPointerStart(event, card, fanRotate);
                     }}
                     style={cardStyle}
                 >
-                    {renderCardInner(card, theme)}
+                    <UnitCardFace card={card} theme={theme}/>
                 </div>;
             })}
         </div>
@@ -1909,9 +1699,10 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
             const floatingTheme = CARD_THEME[floatingDragCard.card.type];
             const unitImageStyle: CSSProperties = {
                 position: 'fixed',
+                top: 0,
+                left: 0,
                 width: DEFENDER_SPRITE_WIDTH,
                 height: DEFENDER_SPRITE_HEIGHT,
-                transform: `translate3d(${floatingDragCard.pointerX - DEFENDER_SPRITE_WIDTH / 2}px, ${floatingDragCard.pointerY - DEFENDER_SPRITE_HEIGHT}px, 0)`,
                 objectFit: 'cover',
                 pointerEvents: 'none',
                 zIndex: 4900,
@@ -1938,14 +1729,12 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 padding: '10px 12px 10px 12px',
                 fontFamily: 'Inter, Arial, sans-serif',
                 position: 'fixed',
+                top: 0,
+                left: 0,
                 display: 'flex',
                 flexDirection: 'column',
                 justifyContent: 'flex-start',
                 zIndex: 5000,
-                transform: `translate3d(${floatingDragCard.x}px, ${floatingDragCard.y}px, 0) rotate(${floatingDragCard.rotation}deg) scale(1.03)`,
-                transition: floatingDragCard.mode === 'returning'
-                    ? `transform ${DRAG_CARD_RETURN_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`
-                    : 'transform 90ms linear',
                 pointerEvents: 'none',
                 overflow: 'hidden',
             };
@@ -1955,14 +1744,32 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
             }
 
             return createPortal(<>
-                {floatingDragCard.mode === 'dragging' ? <img
+                {floatingDragCard.mode === 'dragging' ? <motion.img
                     src={floatingDragCard.card.imageUrl}
                     alt={floatingDragCard.card.name}
                     style={unitImageStyle}
+                    initial={false}
+                    animate={{
+                        x: floatingDragCard.pointerX - DEFENDER_SPRITE_WIDTH / 2,
+                        y: floatingDragCard.pointerY - DEFENDER_SPRITE_HEIGHT,
+                    }}
+                    transition={{type: 'spring', stiffness: 640, damping: 46, mass: 0.32}}
                 /> : null}
-                <div style={floatingStyle}>
-                    {renderCardInner(floatingDragCard.card, floatingTheme)}
-                </div>
+                <motion.div
+                    style={floatingStyle}
+                    initial={false}
+                    animate={{
+                        x: floatingDragCard.x,
+                        y: floatingDragCard.y,
+                        rotate: floatingDragCard.rotation,
+                        scale: 1.03,
+                    }}
+                    transition={floatingDragCard.mode === 'returning'
+                        ? {duration: DRAG_CARD_RETURN_MS / 1000, ease: [0.22, 1, 0.36, 1]}
+                        : {type: 'spring', stiffness: 560, damping: 42, mass: 0.28}}
+                >
+                    <UnitCardFace card={floatingDragCard.card} theme={floatingTheme}/>
+                </motion.div>
             </>, document.body);
         })() : null}
 
