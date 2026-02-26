@@ -1,4 +1,5 @@
 import {CSSProperties, ReactElement, useEffect, useMemo, useRef, useState} from "react";
+import {createPortal} from "react-dom";
 import {Application, Assets, Container, Graphics, Sprite, Text, TextStyle, TilingSprite, Texture} from "pixi.js";
 import {Unit, UnitTemplate} from "./Unit";
 import type {Stage} from "./Stage";
@@ -1879,6 +1880,17 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                     key={card.id}
                     draggable={!interactionLocked && affordable}
                     onDragStart={(event) => handleCardDragStart(event, card)}
+                    onDrag={(event) => {
+                        if (draggingCardId !== card.id) {
+                            return;
+                        }
+
+                        if (event.clientX === 0 && event.clientY === 0) {
+                            return;
+                        }
+
+                        updateFloatingCardFromPointer(event.clientX, event.clientY);
+                    }}
                     onDragEnd={() => {
                         if (!dropHandledRef.current) {
                             resetCardDragState({animateBack: true});
@@ -1938,7 +1950,11 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 overflow: 'hidden',
             };
 
-            return <>
+            if (typeof document === 'undefined' || document.body == null) {
+                return null;
+            }
+
+            return createPortal(<>
                 {floatingDragCard.mode === 'dragging' ? <img
                     src={floatingDragCard.card.imageUrl}
                     alt={floatingDragCard.card.name}
@@ -1947,7 +1963,7 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 <div style={floatingStyle}>
                     {renderCardInner(floatingDragCard.card, floatingTheme)}
                 </div>
-            </>;
+            </>, document.body);
         })() : null}
 
         {isOpeningPack ? <UnitPackOpening

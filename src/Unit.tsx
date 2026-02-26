@@ -469,7 +469,7 @@ export async function loadReserveUnitTemplate(data: any, stage: Stage): Promise<
     }
 
     // Build a core description based on types:
-    const coreDescription = `This elf has a naked ${bodyDescription[bodyType]} with ${hairDescription[hairType]}, green eyes, and pointy ears; they're wielding ${unitDescription[unitType]}.`;
+    const coreDescription = `a naked elf with a ${bodyDescription[bodyType]} and ${hairDescription[hairType]}, green eyes, and pointy ears; they're wielding ${unitDescription[unitType]}.`;
 
     const [imagePromptResponse, quotesResponse] = await Promise.all([
         // Generate image prompt based on description. Use the description from above and prompt a bullet-pointed breakdown of key features for a concise image prompt.
@@ -477,11 +477,11 @@ export async function loadReserveUnitTemplate(data: any, stage: Stage): Promise<
             prompt: `{{messages}}This is a preparatory request for generating an image prompt based on a character description. ` +
                 `The character description is intended to be used for generating a portrait image of a character in a tower-defense strategy game. ` +
                 `The description may include details about the character's physical appearance, attire, and distinguishing features. ` +
-                `Your task is to analyze the provided character description and extract the most critical visual elements that can be used to create a concise and effective image prompt for an AI image generator. ` +
-                `Focus on identifying specific attributes such as clothing style, color scheme, accessories, facial features, and any unique characteristics mentioned in the description. ` +
+                `Your task is to analyze the provided character description and extract the most critical and concise visual elements. ` +
+                `Focus on identifying obvious elements such as clothing, colors, and accessories. ` +
                 `The output should be a bullet-pointed list of these key visual elements that can guide adjustments to the character's portrait. ` +
                 `Character Physical Description:\n${parsedData['description'] || ''}\n\n` +
-                `List clear, visible attributes that are a departure from the default description: ${coreDescription}. Typically: skin tone, hair color, eye color, and clothing.\n\n` +
+                `List clear, objectively apparent attributes that are a departure from the default description: ${coreDescription}. Typically: skin tone, hair color, eye color, and clothing items.\n\n` +
                 `Example Output:\n` +
                 `- Tanned skin\n` +
                 `- Dark hair\n` +
