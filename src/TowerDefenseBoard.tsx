@@ -13,10 +13,9 @@ import AutoFixHighRoundedIcon from '@mui/icons-material/AutoFixHighRounded';
 type Enemy = {
     id: string;
     sprite: Sprite;
-    speed: number;
+    row: number;
+    col: number;
     attack: number;
-    attackRange: number;
-    cooldown: number;
     hp: number;
     maxHp: number;
     lastHitByDefenderId: string | null;
@@ -28,6 +27,8 @@ type Defender = {
     id: string;
     card: Unit;
     sprite: Sprite;
+    row: number;
+    col: number;
     hp: number;
     maxHp: number;
     shield: number;
@@ -70,6 +71,8 @@ const DEFENDER_BAR_Y_OFFSET = DEFENDER_SPRITE_HEIGHT + 18;
 const KILL_LINE_CHANCE = 0.28;
 const VOICE_LINE_MIN_GAP_MS = 1000;
 const PACK_SIZE = 3;
+const GRID_ROWS = 5;
+const TURN_INTERVAL_MS = 1000;
 
 const CARD_THEME: Record<Unit['type'], {
     accent: string;
@@ -210,7 +213,7 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
 
         const app = new Application();
         let isDestroyed = false;
-        let spawnIntervalId: number | null = null;
+        let turnIntervalId: number | null = null;
 
         const boot = async (): Promise<void> => {
             await app.init({
@@ -428,14 +431,147 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 effects.push({graphic: strike, life: 7, maxLife: 7});
             };
 
-            const spawnEnemy = (): void => {
+            let turnCounter = 0;
+
+            const boardGrid = new Graphics();
+            defenderGroundLayer.addChild(boardGrid);
+
+            let gridTileSize = 72;
+            let gridCols = 10;
+            let gridLeft = 0;
+            let gridTop = 0;
+
+            const clamp = (value: number, min: number, max: number): number => {
+                return Math.max(min, Math.min(max, value));
+            };
+
+            const updateGridMetrics = (): void => {
+                const availableHeight = app.renderer.height * 0.62;
+                const desiredTile = Math.floor(availableHeight / GRID_ROWS);
+                gridTileSize = clamp(desiredTile, 56, 112);
+                gridCols = Math.max(8, Math.floor((app.renderer.width * 0.72) / gridTileSize));
+
+                const gridWidth = gridCols * gridTileSize;
+                const gridHeight = GRID_ROWS * gridTileSize;
+                gridLeft = Math.floor((app.renderer.width - gridWidth) / 2);
+                gridTop = Math.floor((app.renderer.height - gridHeight) / 2);
+            };
+
+            const drawGrid = (): void => {
+                boardGrid.clear();
+                const gridWidth = gridCols * gridTileSize;
+                const gridHeight = GRID_ROWS * gridTileSize;
+
+                boardGrid.roundRect(gridLeft - 8, gridTop - 8, gridWidth + 16, gridHeight + 16, 16);
+                boardGrid.fill({color: 0x0f172a, alpha: 0.44});
+
+                for (let row = 0; row < GRID_ROWS; row += 1) {
+                    for (let col = 0; col < gridCols; col += 1) {
+                        boardGrid.rect(
+                            gridLeft + col * gridTileSize,
+                            gridTop + row * gridTileSize,
+                            gridTileSize,
+                            gridTileSize,
+                        );
+                        boardGrid.fill({color: (row + col) % 2 === 0 ? 0x0b1220 : 0x111827, alpha: 0.35});
+                        boardGrid.stroke({width: 1.5, color: 0x94a3b8, alpha: 0.25});
+                    }
+                }
+            };
+
+            const getTileCenter = (row: number, col: number): {x: number; y: number} => ({
+                x: gridLeft + col * gridTileSize + gridTileSize / 2,
+                y: gridTop + row * gridTileSize + gridTileSize / 2,
+            });
+
+            const tileFromWorld = (x: number, y: number): {row: number; col: number} | null => {
+                const col = Math.floor((x - gridLeft) / gridTileSize);
+                const row = Math.floor((y - gridTop) / gridTileSize);
+
+                if (row < 0 || row >= GRID_ROWS || col < 0 || col >= gridCols) {
+                    return null;
+                }
+
+                return {row, col};
+            };
+
+            const getDefenderAt = (row: number, col: number): Defender | null => {
+                return defenders.find((defender) => defender.row === row && defender.col === col) ?? null;
+            };
+
+            const getEnemyAt = (row: number, col: number, ignoreEnemyId?: string): Enemy | null => {
+                return enemies.find((enemy) => {
+                    if (ignoreEnemyId != null && enemy.id === ignoreEnemyId) {
+                        return false;
+                    }
+                    return enemy.row === row && enemy.col === col;
+                }) ?? null;
+            };
+
+            const syncDefenderVisual = (defender: Defender): void => {
+                const center = getTileCenter(defender.row, defender.col);
+                defender.sprite.x = center.x;
+                defender.sprite.y = center.y + gridTileSize * 0.34;
+
+                if (defender.rangeCircle != null) {
+                    defender.rangeCircle.x = center.x;
+                    defender.rangeCircle.y = center.y;
+                }
+
+                if (defender.rangeCone != null) {
+                    defender.rangeCone.x = center.x;
+                    defender.rangeCone.y = center.y;
+                }
+
+                if (defender.shieldCircle != null) {
+                    defender.shieldCircle.x = center.x;
+                    defender.shieldCircle.y = center.y;
+                }
+            };
+
+            const syncEnemyVisual = (enemy: Enemy): void => {
+                const center = getTileCenter(enemy.row, enemy.col);
+                enemy.sprite.x = center.x;
+                enemy.sprite.y = center.y;
+            };
+
+            const updateEnemyBar = (enemy: Enemy): void => {
+                const width = Math.max(24, gridTileSize * 0.66);
+                const height = 5;
+                const ratio = Math.max(0, enemy.hp / enemy.maxHp);
+
+                enemy.healthBarBg.clear();
+                enemy.healthBarBg.rect(enemy.sprite.x - width / 2, enemy.sprite.y - gridTileSize * 0.42, width, height);
+                enemy.healthBarBg.fill({color: 0x111827, alpha: 0.75});
+
+                enemy.healthBar.clear();
+                enemy.healthBar.rect(enemy.sprite.x - width / 2, enemy.sprite.y - gridTileSize * 0.42, width * ratio, height);
+                enemy.healthBar.fill({color: 0x22c55e, alpha: 0.95});
+            };
+
+            const spawnEnemyAtRightEdge = (): void => {
+                const spawnCol = gridCols - 1;
+                const openRows: number[] = [];
+                for (let row = 0; row < GRID_ROWS; row += 1) {
+                    if (getDefenderAt(row, spawnCol) != null) {
+                        continue;
+                    }
+                    if (getEnemyAt(row, spawnCol) != null) {
+                        continue;
+                    }
+                    openRows.push(row);
+                }
+
+                if (openRows.length === 0) {
+                    return;
+                }
+
+                const row = openRows[Math.floor(Math.random() * openRows.length)] ?? 0;
                 const sprite = new Sprite(enemyTexture);
                 sprite.anchor.set(0.5);
-                sprite.width = 56;
-                sprite.height = 56;
+                sprite.width = gridTileSize * 0.62;
+                sprite.height = gridTileSize * 0.62;
                 sprite.tint = 0xef4444;
-                sprite.x = app.renderer.width + 48 + Math.random() * 120;
-                sprite.y = getLaneY();
 
                 const healthBarBg = new Graphics();
                 const healthBar = new Graphics();
@@ -444,44 +580,30 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 enemyLayer.addChild(healthBarBg);
                 enemyLayer.addChild(healthBar);
 
-                enemies.push({
+                const enemy: Enemy = {
                     id: `enemy-${enemyCounter++}`,
+                    row,
+                    col: spawnCol,
                     sprite,
-                    speed: 0.72 + Math.random() * 0.52,
                     attack: 10,
-                    attackRange: 60,
-                    cooldown: 0,
                     hp: 110,
                     maxHp: 110,
                     lastHitByDefenderId: null,
                     healthBarBg,
                     healthBar,
-                });
+                };
+
+                enemies.push(enemy);
+                syncEnemyVisual(enemy);
+                updateEnemyBar(enemy);
             };
 
-            const updateEnemyBar = (enemy: Enemy): void => {
-                const width = 44;
-                const height = 5;
-                const ratio = Math.max(0, enemy.hp / enemy.maxHp);
-
-                enemy.healthBarBg.clear();
-                enemy.healthBarBg.rect(enemy.sprite.x - width / 2, enemy.sprite.y - 40, width, height);
-                enemy.healthBarBg.fill({color: 0x111827, alpha: 0.75});
-
-                enemy.healthBar.clear();
-                enemy.healthBar.rect(enemy.sprite.x - width / 2, enemy.sprite.y - 40, width * ratio, height);
-                enemy.healthBar.fill({color: 0x22c55e, alpha: 0.95});
-            };
-
-            const spawnDefender = (card: Unit, x: number, y: number): void => {
+            const spawnDefender = (card: Unit, row: number, col: number): void => {
                 const sprite = new Sprite(enemyTexture);
                 sprite.anchor.set(0.5, 1);
-                sprite.width = DEFENDER_SPRITE_WIDTH;
-                sprite.height = DEFENDER_SPRITE_HEIGHT;
-                sprite.x = x;
-                sprite.y = y;
-                sprite.eventMode = 'static';
-                sprite.cursor = 'grab';
+                sprite.width = gridTileSize * 0.86;
+                sprite.height = gridTileSize * 1.15;
+                sprite.eventMode = 'none';
 
                 void Assets.load(card.imageUrl)
                     .then((texture) => {
@@ -516,18 +638,15 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 let shieldCircle: Graphics | null = null;
                 let shieldBarBg: Graphics | null = null;
                 let shieldBar: Graphics | null = null;
+
                 if (card.type === 'melee') {
                     rangeCircle = new Graphics();
-                    rangeCircle.circle(0, 0, MELEE_RANGE);
-                    rangeCircle.fill({color: 0x4ade80, alpha: 0.1});
-                    rangeCircle.stroke({width: 2, color: 0x4ade80, alpha: 0.35});
-                    rangeCircle.x = x;
-                    rangeCircle.y = y;
+                    rangeCircle.circle(0, 0, gridTileSize * 1.05);
+                    rangeCircle.fill({color: 0x4ade80, alpha: 0.08});
+                    rangeCircle.stroke({width: 2, color: 0x4ade80, alpha: 0.28});
                     defenderGroundLayer.addChild(rangeCircle);
 
                     shieldCircle = new Graphics();
-                    shieldCircle.x = x;
-                    shieldCircle.y = y;
                     defenderGroundLayer.addChild(shieldCircle);
 
                     shieldBarBg = new Graphics();
@@ -536,21 +655,16 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                     defenderLayer.addChild(shieldBar);
                 } else if (card.type === 'ranged') {
                     rangeCone = new Graphics();
-                    rangeCone.moveTo(0, 0);
-                    rangeCone.arc(0, 0, RANGED_CONE_RANGE, -RANGED_CONE_HALF_ANGLE, RANGED_CONE_HALF_ANGLE);
-                    rangeCone.closePath();
+                    const rowLength = (gridCols - col) * gridTileSize;
+                    rangeCone.rect(0, -gridTileSize / 2 + 2, rowLength, gridTileSize - 4);
                     rangeCone.fill({color: 0x60a5fa, alpha: 0.08});
-                    rangeCone.stroke({width: 2, color: 0x60a5fa, alpha: 0.34});
-                    rangeCone.x = x;
-                    rangeCone.y = y;
+                    rangeCone.stroke({width: 2, color: 0x60a5fa, alpha: 0.28});
                     defenderGroundLayer.addChild(rangeCone);
                 } else {
                     rangeCircle = new Graphics();
-                    rangeCircle.circle(0, 0, MAGIC_RANGE);
+                    rangeCircle.circle(0, 0, gridTileSize * 1.1);
                     rangeCircle.fill({color: 0xc084fc, alpha: 0.07});
-                    rangeCircle.stroke({width: 2, color: 0xc084fc, alpha: 0.32});
-                    rangeCircle.x = x;
-                    rangeCircle.y = y;
+                    rangeCircle.stroke({width: 2, color: 0xc084fc, alpha: 0.27});
                     defenderGroundLayer.addChild(rangeCircle);
                 }
 
@@ -558,6 +672,8 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 const defender: Defender = {
                     id: `def-${defenderCounter++}`,
                     card,
+                    row,
+                    col,
                     sprite,
                     hp: card.health,
                     maxHp: card.health,
@@ -572,113 +688,12 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                     rangeCone,
                 };
 
-                const syncDefenderVisuals = (): void => {
-                    if (defender.rangeCircle != null) {
-                        defender.rangeCircle.x = defender.sprite.x;
-                        defender.rangeCircle.y = defender.sprite.y;
-                    }
-
-                    if (defender.rangeCone != null) {
-                        defender.rangeCone.x = defender.sprite.x;
-                        defender.rangeCone.y = defender.sprite.y;
-                    }
-
-                    if (defender.shieldCircle != null) {
-                        defender.shieldCircle.x = defender.sprite.x;
-                        defender.shieldCircle.y = defender.sprite.y;
-                    }
-                };
-
-                let dragStartX = defender.sprite.x;
-                let dragStartY = defender.sprite.y;
-                let dragOffsetX = 0;
-                let dragOffsetY = 0;
-                let isDraggingDefender = false;
-
-                const getClampedPosition = (targetX: number, targetY: number): {x: number; y: number} => {
-                    const clampedX = Math.max(60, Math.min(app.renderer.width - 70, targetX));
-                    const clampedY = Math.max(DEFENDER_SPRITE_HEIGHT + 20, Math.min(app.renderer.height - 20, targetY));
-                    const clampedSafeX = Math.max(DEFENDER_HALF_WIDTH + 10, Math.min(app.renderer.width - DEFENDER_HALF_WIDTH - 10, clampedX));
-                    return {x: clampedSafeX, y: clampedY};
-                };
-
-                const canMoveDefender = (targetX: number, targetY: number): boolean => {
-                    return !defenders.some((otherDefender) => {
-                        if (otherDefender.id === defender.id) {
-                            return false;
-                        }
-
-                        const dx = otherDefender.sprite.x - targetX;
-                        const dy = otherDefender.sprite.y - targetY;
-                        return (dx * dx + dy * dy) < (216 * 216);
-                    });
-                };
-
-                const endDefenderDrag = (): void => {
-                    if (!isDraggingDefender) {
-                        return;
-                    }
-
-                    isDraggingDefender = false;
-                    sprite.alpha = 1;
-
-                    const currentX = defender.sprite.x;
-                    const currentY = defender.sprite.y;
-                    const validPosition = canMoveDefender(currentX, currentY);
-
-                    if (!validPosition) {
-                        defender.sprite.x = dragStartX;
-                        defender.sprite.y = dragStartY;
-                        syncDefenderVisuals();
-                        setStatusText('Cannot reposition here. Keep some spacing between defenders.');
-                    }
-                };
-
-                sprite.on('pointerdown', (event) => {
-                    if (waveInProgress) {
-                        return;
-                    }
-
-                    const pointerPosition = event.getLocalPosition(world);
-                    dragStartX = defender.sprite.x;
-                    dragStartY = defender.sprite.y;
-                    dragOffsetX = pointerPosition.x - defender.sprite.x;
-                    dragOffsetY = pointerPosition.y - defender.sprite.y;
-                    isDraggingDefender = true;
-                    sprite.alpha = 0.86;
-                });
-
-                sprite.on('pointermove', (event) => {
-                    if (!isDraggingDefender || waveInProgress) {
-                        return;
-                    }
-
-                    const pointerPosition = event.getLocalPosition(world);
-                    const clampedPosition = getClampedPosition(pointerPosition.x - dragOffsetX, pointerPosition.y - dragOffsetY);
-                    defender.sprite.x = clampedPosition.x;
-                    defender.sprite.y = clampedPosition.y;
-                    syncDefenderVisuals();
-                });
-
-                sprite.on('pointerup', endDefenderDrag);
-                sprite.on('pointerupoutside', endDefenderDrag);
-
                 defenders.push(defender);
+                syncDefenderVisual(defender);
             };
 
-            const getClampedPlacement = (x: number, y: number): {x: number; y: number} => {
-                const clampedX = Math.max(60, Math.min(app.renderer.width - 70, x));
-                const clampedY = Math.max(DEFENDER_SPRITE_HEIGHT + 20, Math.min(app.renderer.height - 20, y));
-                const clampedSafeX = Math.max(DEFENDER_HALF_WIDTH + 10, Math.min(app.renderer.width - DEFENDER_HALF_WIDTH - 10, clampedX));
-                return {x: clampedSafeX, y: clampedY};
-            };
-
-            const canPlaceAt = (x: number, y: number): boolean => {
-                return !defenders.some((defender) => {
-                    const dx = defender.sprite.x - x;
-                    const dy = defender.sprite.y - y;
-                    return (dx * dx + dy * dy) < (216 * 216);
-                });
+            const canPlaceAtTile = (row: number, col: number): boolean => {
+                return getDefenderAt(row, col) == null;
             };
 
             const clearPlacementPreview = (): void => {
@@ -695,8 +710,14 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                     return;
                 }
 
-                const clampedPosition = getClampedPlacement(x, y);
-                const placeable = canPlaceAt(clampedPosition.x, clampedPosition.y);
+                const tile = tileFromWorld(x, y);
+                if (tile == null) {
+                    clearPlacementPreview();
+                    return;
+                }
+
+                const placeable = canPlaceAtTile(tile.row, tile.col);
+                const center = getTileCenter(tile.row, tile.col);
 
                 if (placementPreview == null || placementPreviewType !== card.type) {
                     placementPreview?.destroy();
@@ -705,53 +726,22 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                     defenderGroundLayer.addChild(placementPreview);
                 }
 
-                const fillAlpha = placeable ? 0.1 : 0.07;
-                const strokeAlpha = placeable ? 0.38 : 0.72;
+                const colorByType: Record<Unit['type'], number> = {
+                    melee: 0x4ade80,
+                    ranged: 0x60a5fa,
+                    magic: 0xc084fc,
+                };
 
+                const color = placeable ? colorByType[card.type] : 0xf87171;
                 placementPreview.clear();
-                placementPreview.x = clampedPosition.x;
-                placementPreview.y = clampedPosition.y;
-
-                if (card.type === 'melee') {
-                    const color = placeable ? 0x4ade80 : 0xf87171;
-                    placementPreview.circle(0, 0, MELEE_RANGE);
-                    placementPreview.fill({color, alpha: fillAlpha});
-                    placementPreview.stroke({width: 2, color, alpha: strokeAlpha});
-                } else if (card.type === 'ranged') {
-                    const color = placeable ? 0x60a5fa : 0xf87171;
-                    placementPreview.moveTo(0, 0);
-                    placementPreview.arc(0, 0, RANGED_CONE_RANGE, -RANGED_CONE_HALF_ANGLE, RANGED_CONE_HALF_ANGLE);
-                    placementPreview.closePath();
-                    placementPreview.fill({color, alpha: placeable ? 0.09 : 0.06});
-                    placementPreview.stroke({width: 2, color, alpha: placeable ? 0.34 : 0.7});
-                } else {
-                    const color = placeable ? 0xc084fc : 0xf87171;
-                    placementPreview.circle(0, 0, MAGIC_RANGE);
-                    placementPreview.fill({color, alpha: placeable ? 0.08 : 0.06});
-                    placementPreview.stroke({width: 2, color, alpha: placeable ? 0.33 : 0.7});
-                }
-
-                placementPreview.circle(0, 0, 12);
-                placementPreview.fill({color: placeable ? 0xe2e8f0 : 0xfca5a5, alpha: 0.9});
-            };
-
-            const findClosestDefender = (x: number, y: number, predicate?: (defender: Defender) => boolean): Defender | null => {
-                let closest: Defender | null = null;
-                let minDistance = Number.POSITIVE_INFINITY;
-                for (const defender of defenders) {
-                    if (predicate != null && !predicate(defender)) {
-                        continue;
-                    }
-
-                    const dx = defender.sprite.x - x;
-                    const dy = defender.sprite.y - y;
-                    const distance = Math.sqrt(dx * dx + dy * dy);
-                    if (distance < minDistance) {
-                        minDistance = distance;
-                        closest = defender;
-                    }
-                }
-                return closest;
+                placementPreview.rect(
+                    center.x - gridTileSize / 2 + 2,
+                    center.y - gridTileSize / 2 + 2,
+                    gridTileSize - 4,
+                    gridTileSize - 4,
+                );
+                placementPreview.fill({color, alpha: placeable ? 0.16 : 0.22});
+                placementPreview.stroke({width: 2, color, alpha: placeable ? 0.65 : 0.85});
             };
 
             const removeDefender = (index: number): void => {
@@ -801,10 +791,10 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                     }
 
                     if (defender.shieldBarBg != null && defender.shieldBar != null) {
-                        const barWidth = 42;
+                        const barWidth = Math.max(24, gridTileSize * 0.6);
                         const barHeight = 5;
                         const left = defender.sprite.x - barWidth / 2;
-                        const top = defender.sprite.y - DEFENDER_BAR_Y_OFFSET;
+                        const top = defender.sprite.y - gridTileSize * 0.98;
 
                         defender.shieldBarBg.clear();
                         defender.shieldBarBg.rect(left, top, barWidth, barHeight);
@@ -817,108 +807,118 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 }
             };
 
-            const updateDefenderAttacks = (deltaTime: number): void => {
-                if (!waveInProgress || enemies.length === 0) {
-                    return;
-                }
-
-                for (const defender of defenders) {
-                    defender.cooldown = Math.max(0, defender.cooldown - deltaTime);
-                    if (defender.cooldown > 0) {
+            const collectAdjacentEnemies = (row: number, col: number, includeCenter: boolean): Enemy[] => {
+                const targets: Enemy[] = [];
+                for (const enemy of enemies) {
+                    const rowDiff = Math.abs(enemy.row - row);
+                    const colDiff = Math.abs(enemy.col - col);
+                    const adjacent = rowDiff <= 1 && colDiff <= 1;
+                    if (!adjacent) {
                         continue;
                     }
 
-                    if (defender.card.type === 'melee') {
-                        const slashRadius = MELEE_RANGE;
-                        const targets = enemies.filter((enemy) => {
-                            const dx = enemy.sprite.x - defender.sprite.x;
-                            const dy = enemy.sprite.y - defender.sprite.y;
-                            return (dx * dx + dy * dy) <= slashRadius * slashRadius;
-                        });
+                    if (!includeCenter && rowDiff === 0 && colDiff === 0) {
+                        continue;
+                    }
 
+                    targets.push(enemy);
+                }
+                return targets;
+            };
+
+            const executeDefenderTurn = (): void => {
+                for (const defender of defenders) {
+                    if (defender.card.type === 'melee') {
+                        const targets = collectAdjacentEnemies(defender.row, defender.col, false);
                         if (targets.length > 0) {
                             for (const enemy of targets) {
-                                damageEnemy(enemy, defender.card.attack * 1.18, defender);
+                                damageEnemy(enemy, defender.card.attack, defender);
                             }
-                            createMeleeEffect(defender.sprite.x, defender.sprite.y, slashRadius);
-                            defender.cooldown = 36;
+                            const center = getTileCenter(defender.row, defender.col);
+                            createMeleeEffect(center.x, center.y, gridTileSize * 0.72);
                         }
                         continue;
                     }
 
                     if (defender.card.type === 'ranged') {
-                        const coneLength = RANGED_CONE_RANGE;
-                        const halfAngle = RANGED_CONE_HALF_ANGLE;
-
-                        const inCone = enemies
-                            .filter((enemy) => {
-                                const dx = enemy.sprite.x - defender.sprite.x;
-                                const dy = enemy.sprite.y - defender.sprite.y;
-                                if (dx <= 0) {
-                                    return false;
-                                }
-
-                                const distance = Math.sqrt(dx * dx + dy * dy);
-                                if (distance > coneLength) {
-                                    return false;
-                                }
-
-                                const angle = Math.abs(Math.atan2(dy, dx));
-                                return angle <= halfAngle;
-                            })
-                            .sort((a, b) => a.sprite.x - b.sprite.x);
-
-                        const target = inCone[0];
-                        if (target != null) {
-                            damageEnemy(target, defender.card.attack * 1.35, defender);
-                            createArrowEffect(defender.sprite.x + 8, defender.sprite.y - 3, target.sprite.x, target.sprite.y);
-                            defender.cooldown = 29;
+                        const targets = enemies.filter((enemy) => enemy.row === defender.row);
+                        if (targets.length > 0) {
+                            for (const enemy of targets) {
+                                damageEnemy(enemy, defender.card.attack, defender);
+                                createArrowEffect(defender.sprite.x, defender.sprite.y - gridTileSize * 0.35, enemy.sprite.x, enemy.sprite.y);
+                            }
                         }
                         continue;
                     }
 
-                    const inMagicRange = enemies.filter((enemy) => {
-                        const dx = enemy.sprite.x - defender.sprite.x;
-                        const dy = enemy.sprite.y - defender.sprite.y;
-                        return (dx * dx + dy * dy) <= MAGIC_RANGE * MAGIC_RANGE;
-                    });
+                    const rowPriorityTarget = enemies
+                        .filter((enemy) => enemy.row === defender.row)
+                        .sort((a, b) => a.col - b.col)[0];
 
-                    const randomEnemy = inMagicRange[Math.floor(Math.random() * inMagicRange.length)];
-                    if (randomEnemy != null) {
-                        const jumpPoints: Array<{x: number; y: number}> = [{x: defender.sprite.x, y: defender.sprite.y}];
-                        const chainTargets: Enemy[] = [randomEnemy];
-                        let anchor = randomEnemy;
-
-                        for (let jump = 0; jump < 2; jump += 1) {
-                            const nextTarget = enemies
-                                .filter((enemy) => enemy.id !== anchor.id && !chainTargets.some((used) => used.id === enemy.id))
-                                .map((enemy) => {
-                                    const dx = enemy.sprite.x - anchor.sprite.x;
-                                    const dy = enemy.sprite.y - anchor.sprite.y;
-                                    return {enemy, distanceSq: dx * dx + dy * dy};
-                                })
-                                .filter((entry) => entry.distanceSq <= 165 * 165)
-                                .sort((a, b) => a.distanceSq - b.distanceSq)[0]?.enemy;
-
-                            if (nextTarget == null) {
-                                break;
+                    const fallbackTarget = enemies
+                        .slice()
+                        .sort((a, b) => {
+                            if (a.col !== b.col) {
+                                return a.col - b.col;
                             }
+                            return Math.abs(a.row - defender.row) - Math.abs(b.row - defender.row);
+                        })[0];
 
-                            chainTargets.push(nextTarget);
-                            anchor = nextTarget;
-                        }
-
-                        for (let index = 0; index < chainTargets.length; index += 1) {
-                            const target = chainTargets[index];
-                            jumpPoints.push({x: target.sprite.x, y: target.sprite.y});
-                            const falloff = Math.max(0.55, 1 - index * 0.23);
-                            damageEnemy(target, defender.card.attack * 1.22 * falloff, defender);
-                            createMagicImpactRadiusEffect(target.sprite.x, target.sprite.y, 56);
-                        }
-
-                        createMagicBoltEffect(jumpPoints);
-                        defender.cooldown = 64;
+                    const target = rowPriorityTarget ?? fallbackTarget;
+                    if (target == null) {
+                        continue;
                     }
+
+                    const splashTargets = collectAdjacentEnemies(target.row, target.col, true);
+                    for (const enemy of splashTargets) {
+                        damageEnemy(enemy, defender.card.attack, defender);
+                        createMagicImpactRadiusEffect(enemy.sprite.x, enemy.sprite.y, gridTileSize * 0.56);
+                    }
+
+                    createMagicBoltEffect([
+                        {x: defender.sprite.x, y: defender.sprite.y - gridTileSize * 0.28},
+                        {x: target.sprite.x, y: target.sprite.y},
+                    ]);
+                }
+            };
+
+            const executeEnemyTurn = (): void => {
+                const sortedEnemies = enemies.slice().sort((a, b) => {
+                    if (a.col !== b.col) {
+                        return a.col - b.col;
+                    }
+                    return a.row - b.row;
+                });
+
+                for (const enemy of sortedEnemies) {
+                    if (enemy.hp <= 0) {
+                        continue;
+                    }
+
+                    const nextCol = enemy.col - 1;
+                    if (nextCol < 0) {
+                        enemy.hp = 0;
+                        setStatusText('An enemy slipped through the line.');
+                        continue;
+                    }
+
+                    const defenderInFront = getDefenderAt(enemy.row, nextCol);
+                    if (defenderInFront != null) {
+                        damageDefender(defenderInFront, enemy.attack);
+                        createEnemyStrikeEffect(defenderInFront.sprite.x, defenderInFront.sprite.y - gridTileSize * 0.35);
+                        enemy.sprite.tint = 0xdc2626;
+                        continue;
+                    }
+
+                    const enemyInFront = getEnemyAt(enemy.row, nextCol, enemy.id);
+                    if (enemyInFront != null) {
+                        enemy.sprite.tint = 0xef4444;
+                        continue;
+                    }
+
+                    enemy.col = nextCol;
+                    enemy.sprite.tint = 0xef4444;
+                    syncEnemyVisual(enemy);
                 }
             };
 
@@ -936,71 +936,22 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 }
             };
 
-            const updateBattle = (ticker: {deltaTime: number}): void => {
-                const deltaTime = ticker.deltaTime;
-
-                updateDefenderAttacks(deltaTime);
-                updateDefenderShieldVisuals(deltaTime);
-                updateEffects();
-
+            const removeDeadUnits = (): void => {
                 for (let index = enemies.length - 1; index >= 0; index -= 1) {
                     const enemy = enemies[index];
-                    enemy.cooldown = Math.max(0, enemy.cooldown - deltaTime);
-
-                    const attackTarget = findClosestDefender(enemy.sprite.x, enemy.sprite.y, (defender) => {
-                        const dx = defender.sprite.x - enemy.sprite.x;
-                        const dy = defender.sprite.y - enemy.sprite.y;
-                        return (dx * dx + dy * dy) <= enemy.attackRange * enemy.attackRange;
-                    });
-
-                    if (attackTarget != null) {
-                        enemy.sprite.tint = 0xdc2626;
-                        if (enemy.cooldown <= 0) {
-                            damageDefender(attackTarget, enemy.attack);
-                            createEnemyStrikeEffect(attackTarget.sprite.x, attackTarget.sprite.y);
-                            enemy.cooldown = 42;
-                        }
-                    } else {
-                        enemy.sprite.tint = 0xef4444;
-                        enemy.sprite.x -= enemy.speed * deltaTime;
-
-                        const magnetTarget = findClosestDefender(enemy.sprite.x, enemy.sprite.y, (defender) => {
-                            const dx = defender.sprite.x - enemy.sprite.x;
-                            const dy = defender.sprite.y - enemy.sprite.y;
-                            return (dx * dx + dy * dy) <= ENEMY_MAGNET_RADIUS * ENEMY_MAGNET_RADIUS;
-                        });
-
-                        if (magnetTarget != null) {
-                            const dy = magnetTarget.sprite.y - enemy.sprite.y;
-                            const maxDrift = ENEMY_MAX_VERTICAL_DRIFT * deltaTime;
-                            const pullDelta = dy * ENEMY_MAGNET_PULL;
-                            const clampedDelta = Math.max(-maxDrift, Math.min(maxDrift, pullDelta));
-                            enemy.sprite.y += clampedDelta;
-                        }
-
-                        enemy.sprite.y = Math.max(42, Math.min(app.renderer.height - 42, enemy.sprite.y));
-                    }
-
-                    if (enemy.hp <= 0) {
-                        if (enemy.lastHitByDefenderId != null) {
-                            const killer = defenders.find((defender) => defender.id === enemy.lastHitByDefenderId);
-                            playVoiceLine(killer?.card.killLineUrl, KILL_LINE_CHANCE);
-                        }
-                        enemy.sprite.destroy();
-                        enemy.healthBarBg.destroy();
-                        enemy.healthBar.destroy();
-                        enemies.splice(index, 1);
+                    if (enemy.hp > 0) {
                         continue;
                     }
 
-                    updateEnemyBar(enemy);
-
-                    if (enemy.sprite.x < -70) {
-                        enemy.sprite.destroy();
-                        enemy.healthBarBg.destroy();
-                        enemy.healthBar.destroy();
-                        enemies.splice(index, 1);
+                    if (enemy.lastHitByDefenderId != null) {
+                        const killer = defenders.find((defender) => defender.id === enemy.lastHitByDefenderId);
+                        playVoiceLine(killer?.card.killLineUrl, KILL_LINE_CHANCE);
                     }
+
+                    enemy.sprite.destroy();
+                    enemy.healthBarBg.destroy();
+                    enemy.healthBar.destroy();
+                    enemies.splice(index, 1);
                 }
 
                 for (let index = defenders.length - 1; index >= 0; index -= 1) {
@@ -1009,17 +960,65 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                         removeDefender(index);
                     }
                 }
+            };
 
-                if (waveInProgress && enemiesSpawned >= totalEnemiesInWave && enemies.length === 0) {
-                    waveInProgress = false;
-                    clearPlacementPreview();
-                    setIsWaveRunning(false);
-                    setGold((current) => current + 8);
-                    const nextHand = stage.drawUnitsFromReserve(6);
-                    setHand(nextHand);
-                    setStatusText(nextHand.length > 0
-                        ? 'Wave cleared. Reinforcements arrived; draw new cards and deploy.'
-                        : 'Wave cleared. Waiting for reserve cards to finish loading.');
+            const finishWaveIfCleared = (): void => {
+                if (!waveInProgress || enemiesSpawned < totalEnemiesInWave || enemies.length > 0) {
+                    return;
+                }
+
+                waveInProgress = false;
+                if (turnIntervalId != null) {
+                    window.clearInterval(turnIntervalId);
+                    turnIntervalId = null;
+                }
+
+                clearPlacementPreview();
+                setIsWaveRunning(false);
+                setGold((current) => current + 8);
+                const nextHand = stage.drawUnitsFromReserve(6);
+                setHand(nextHand);
+                setStatusText(nextHand.length > 0
+                    ? 'Wave cleared. Reinforcements arrived; draw new cards and deploy.'
+                    : 'Wave cleared. Waiting for reserve cards to finish loading.');
+            };
+
+            const runTurn = (): void => {
+                if (!waveInProgress) {
+                    return;
+                }
+
+                turnCounter += 1;
+
+                if (enemiesSpawned < totalEnemiesInWave) {
+                    const priorEnemyCount = enemies.length;
+                    spawnEnemyAtRightEdge();
+                    if (enemies.length > priorEnemyCount) {
+                        enemiesSpawned += 1;
+                    }
+                }
+
+                executeDefenderTurn();
+                removeDeadUnits();
+
+                executeEnemyTurn();
+                removeDeadUnits();
+
+                for (const enemy of enemies) {
+                    syncEnemyVisual(enemy);
+                    updateEnemyBar(enemy);
+                }
+
+                updateDefenderShieldVisuals(60);
+                setStatusText(`Turn ${turnCounter} resolved. Enemies remaining: ${enemies.length}.`);
+                finishWaveIfCleared();
+            };
+
+            const updateBattle = (ticker: {deltaTime: number}): void => {
+                updateEffects();
+
+                for (const enemy of enemies) {
+                    updateEnemyBar(enemy);
                 }
             };
 
@@ -1030,29 +1029,17 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
 
                 waveInProgress = true;
                 enemiesSpawned = 0;
+                turnCounter = 0;
                 setIsWaveRunning(true);
-                setStatusText('Round started. Hand retracted while defenders engage.');
+                setStatusText('Wave started. Turn 1 begins shortly.');
 
                 if (defenders.length > 0) {
                     const randomDefender = defenders[Math.floor(Math.random() * defenders.length)];
                     playVoiceLine(randomDefender?.card.waveLineUrl);
                 }
 
-                spawnEnemy();
-                enemiesSpawned += 1;
-
-                spawnIntervalId = window.setInterval(() => {
-                    if (enemiesSpawned >= totalEnemiesInWave) {
-                        if (spawnIntervalId != null) {
-                            window.clearInterval(spawnIntervalId);
-                            spawnIntervalId = null;
-                        }
-                        return;
-                    }
-
-                    spawnEnemy();
-                    enemiesSpawned += 1;
-                }, 750);
+                runTurn();
+                turnIntervalId = window.setInterval(runTurn, TURN_INTERVAL_MS);
 
                 return true;
             };
@@ -1062,13 +1049,17 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                     return false;
                 }
 
-                const clampedPosition = getClampedPlacement(x, y);
-                const placeable = canPlaceAt(clampedPosition.x, clampedPosition.y);
+                const tile = tileFromWorld(x, y);
+                if (tile == null) {
+                    return false;
+                }
+
+                const placeable = canPlaceAtTile(tile.row, tile.col);
                 if (!placeable) {
                     return false;
                 }
 
-                spawnDefender(card, clampedPosition.x, clampedPosition.y);
+                spawnDefender(card, tile.row, tile.col);
                 clearPlacementPreview();
                 return true;
             };
@@ -1076,7 +1067,30 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
             const resizeScene = (): void => {
                 grass.width = app.renderer.width;
                 grass.height = app.renderer.height;
+
+                updateGridMetrics();
+                drawGrid();
+
+                for (const defender of defenders) {
+                    if (defender.card.type === 'ranged' && defender.rangeCone != null) {
+                        defender.rangeCone.clear();
+                        const rowLength = (gridCols - defender.col) * gridTileSize;
+                        defender.rangeCone.rect(0, -gridTileSize / 2 + 2, rowLength, gridTileSize - 4);
+                        defender.rangeCone.fill({color: 0x60a5fa, alpha: 0.08});
+                        defender.rangeCone.stroke({width: 2, color: 0x60a5fa, alpha: 0.28});
+                    }
+
+                    syncDefenderVisual(defender);
+                }
+
+                for (const enemy of enemies) {
+                    syncEnemyVisual(enemy);
+                    updateEnemyBar(enemy);
+                }
             };
+
+            updateGridMetrics();
+            drawGrid();
 
             boardApiRef.current = {placeDefender, startWave, updatePlacementPreview, clearPlacementPreview};
             app.renderer.on('resize', resizeScene);
@@ -1089,8 +1103,8 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
             isDestroyed = true;
             boardApiRef.current = null;
 
-            if (spawnIntervalId != null) {
-                window.clearInterval(spawnIntervalId);
+            if (turnIntervalId != null) {
+                window.clearInterval(turnIntervalId);
             }
 
             clearDragImage();
