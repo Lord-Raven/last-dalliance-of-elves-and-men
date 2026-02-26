@@ -163,7 +163,7 @@ export const DEMO_FULL_PATHS: ReadonlyArray<string> = [
     'Happy_Spanker/crysthea-hellon-ebe30800bba3',
     'Happy_Spanker/eliara-2eaaa1e0cdd4',
     'JakeH/kalariel-ebonheart-a3388e951164',
-    'Happy_Spanker/ena-riallath-69d68f3dcafb',*/
+    'Happy_Spanker/ena-riallath-69d68f3dcafb',
     'ErlkingC/ishe-dark-elf-assassin-077f6ba2962a',
     'Boy_Next_Door/nyrissa-the-runaway-slave-b376f6d5862c',
     'miyo_rin/sylvanetta-disaster-princess-15906b408451',
@@ -181,7 +181,7 @@ export const DEMO_FULL_PATHS: ReadonlyArray<string> = [
     'miyo_rin/nezraya-matron-mother-of-house-morvyth-19aea27c8346',
     'statuotw/arryn-the-knight-5843a0ee',
     'LilithVirty/lyssandra-the-ironwood-massacre-f191e66c0059',
-    'AnonBrier/lyndis-the-vengeful-rogue-mistwater-chronicles-16e26ef00c66',
+    'AnonBrier/lyndis-the-vengeful-rogue-mistwater-chronicles-16e26ef00c66',*/
     '7leaf/claire-your-elf-mother-c304f9906eb7',
     'Sexiam/seraphis-darkspire-captured-elf-princess-spoils-of-war-3bbfa54a8921',
     'statuotw/shelara-the-elven-slave-3155631e',
@@ -446,60 +446,78 @@ export async function loadReserveUnitTemplate(data: any, stage: Stage): Promise<
     console.log(generatedResponse);
     const parsedData = parseStructuredFields(generatedResponse?.result);
 
-    // Generate image prompt based on description. Use the description from above and prompt a bullet-pointed breakdown of key features for a concise image prompt.
-    const imagePromptResponse = await stage.generator.textGen({
-        prompt: `{{messages}}This is a preparatory request for generating an image prompt based on a character description. ` +
-            `The character description is intended to be used for generating a portrait image of a character in a tower-defense strategy game. ` +
-            `The description may include details about the character's physical appearance, attire, and distinguishing features. ` +
-            `Your task is to analyze the provided character description and extract key visual elements that can be used to create a concise and effective image prompt for an AI image generator. ` +
-            `Focus on identifying specific attributes such as clothing style, color scheme, accessories, facial features, and any unique characteristics mentioned in the description. ` +
-            `The output should be a bullet-pointed list of these key visual elements that can guide the creation of the character's portrait.\n\n` +
-            `Character Description:\n${parsedData['description'] || ''}\n\n` +
-            `Example Output:\n` +
-            `- Tall, athletic build\n` +
-            `- Short, dark hair\n` +
-            `- Piercing blue eyes\n` +
-            `- Simple, utilitarian outfit made from durable materials\n` +
-            `- Confident and determined expression\n` +
-            `- Combat boots\n` +
-            `#END#`,
-        stop: ['#END#'],
-        include_history: true,
-        max_tokens: 150,
-    });
+
+    const unitType = parseUnitType(parsedData['unittype'] || parsedData['type']) || 'melee';
+    const bodyType = parseBodyType(parsedData['bodytype'] || parsedData['body']) || 'average';
+    const hairType = parseHairType(parsedData['hairtype'] || parsedData['hair']) || 'long';
+    const fallbackType = unitType ?? 'ranged';
+    const defaultStats = DEFAULT_STATS_BY_TYPE[fallbackType];
+    const unitDescription = {
+        'melee': 'a longsword.',
+        'ranged': 'a bow and quiver of arrows.',
+        'magic': 'a mystical staff.',
+    }
+    const bodyDescription = {
+        'slim': 'slender build',
+        'average': 'athletic build',
+        'curvy': 'curvy figure',
+    }
+    const hairDescription = {
+        'short': 'short blonde hair',
+        'long': 'long blonde hair',
+        'ponytail': 'a blonde ponytail',
+    }
+
+    // Build a core description based on types:
+    const coreDescription = `This character has a naked ${bodyDescription[bodyType]} with ${hairDescription[hairType]}, wielding ${unitDescription[unitType]}.`;
+
+    const [imagePromptResponse, quotesResponse] = await Promise.all([
+        // Generate image prompt based on description. Use the description from above and prompt a bullet-pointed breakdown of key features for a concise image prompt.
+        stage.generator.textGen({
+            prompt: `{{messages}}This is a preparatory request for generating an image prompt based on a character description. ` +
+                `The character description is intended to be used for generating a portrait image of a character in a tower-defense strategy game. ` +
+                `The description may include details about the character's physical appearance, attire, and distinguishing features. ` +
+                `Your task is to analyze the provided character description and extract key visual elements that can be used to create a concise and effective image prompt for an AI image generator. ` +
+                `Focus on identifying specific attributes such as clothing style, color scheme, accessories, facial features, and any unique characteristics mentioned in the description. ` +
+                `The output should be a bullet-pointed list of these key visual elements that can guide the creation of the character's portrait. ` +
+                `Focus on listing details that are a departure from the default description: ${coreDescription}.\n\n` +
+                `Character Physical Description:\n${parsedData['description'] || ''}\n\n` +
+                `Example Output:\n` +
+                `- dark hair\n` +
+                `- Blue eyes\n` +
+                `- Simple, utilitarian outfit made from durable materials\n` +
+                `- Confident and determined expression\n` +
+                `- Combat boots\n` +
+                `#END#`,
+            stop: ['#END'],
+            include_history: true,
+            max_tokens: 150,
+        }),
+        stage.generator.textGen({
+            prompt: `{{messages}}This is a follow-up request for short in-game situational character voice lines.` +
+                `\n\nGame Premise:\n${gamePremise}` +
+                `\n\nCharacter Name: ${parsedData['name'] || data.name}` +
+                `\nCharacter Description: ${parsedData['description'] || ''}` +
+                `\nCharacter Personality/Profile: ${parsedData['profile'] || data.personality}` +
+                `\n\nEnemy context: The enemies are generally disgusting human men invading the elven homeland.` +
+                `\n\nGenerate four brief lines in this strict format:` +
+                `\nDEPLOY LINE: one short line spoken when this character is deployed.` +
+                `\nKILL LINE: one short line spoken when this character defeats an enemy.` +
+                `\nWAVE LINE: one short line spoken when a wave begins.` +
+                `\nDEATH LINE: one short line spoken when this character is defeated by an enemy.` +
+                `\n#END#`,
+            stop: ['#END'],
+            include_history: true,
+            max_tokens: 220,
+        }),
+    ]);
     console.log('Generated image prompt breakdown:');
     console.log(imagePromptResponse);
-    const imagePrompt = (imagePromptResponse?.result || '').split('\n').map(line => line.replace(/^-+\s*/, '').trim()).filter(line => line.length > 0).join(', ') || parsedData['description'] || '';
+    const imagePrompt = (imagePromptResponse?.result || '').split('\n').map(line => line.replace(/^-+\s*/, '-').trim()).filter(line => line.length > 0).join('\n') || parsedData['description'] || '';
 
-
-
-
-    const quotesResponse = await stage.generator.textGen({
-        prompt: `{{messages}}This is a follow-up request for short in-game situational character voice lines.` +
-            `\n\nGame Premise:\n${gamePremise}` +
-            `\n\nCharacter Name: ${parsedData['name'] || data.name}` +
-            `\nCharacter Description: ${parsedData['description'] || ''}` +
-            `\nCharacter Personality/Profile: ${parsedData['profile'] || data.personality}` +
-            `\n\nEnemy context: The enemies are generally disgusting human men invading the elven homeland.` +
-            `\n\nGenerate four brief lines in this strict format:` +
-            `\nDEPLOY LINE: one short line spoken when this character is deployed.` +
-            `\nKILL LINE: one short line spoken when this character defeats an enemy.` +
-            `\nWAVE LINE: one short line spoken when a wave begins.` +
-            `\nDEATH LINE: one short line spoken when this character is defeated by an enemy.` +
-            `\n#END#`,
-        stop: ['#END'],
-        include_history: true,
-        max_tokens: 220,
-    });
     console.log('Generated situational quote lines:');
     console.log(quotesResponse);
     const parsedQuotes = parseStructuredFields(quotesResponse?.result);
-
-    const unitType = parseUnitType(parsedData['unittype'] || parsedData['type']);
-    const bodyType = parseBodyType(parsedData['bodytype'] || parsedData['body']);
-    const hairType = parseHairType(parsedData['hairtype'] || parsedData['hair']);
-    const fallbackType = unitType ?? 'ranged';
-    const defaultStats = DEFAULT_STATS_BY_TYPE[fallbackType];
 
     const baseUrl = getElfPortrait(unitType ?? 'ranged', bodyType ?? 'average', hairType ?? 'short');
 

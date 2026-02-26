@@ -57,6 +57,16 @@ type BoardApi = {
     clearPlacementPreview: () => void;
 };
 
+type FloatingDragCard = {
+    card: Unit;
+    x: number;
+    y: number;
+    startX: number;
+    startY: number;
+    rotation: number;
+    mode: 'dragging' | 'returning';
+};
+
 
 const DEFENDER_SPRITE_WIDTH = 200;
 const DEFENDER_SPRITE_HEIGHT = 300;
@@ -72,6 +82,7 @@ const GRID_UPWARD_SHIFT_RATIO = 0.08;
 const ENEMY_MOVE_DURATION_RATIO = 0.78;
 const HAND_FAN_ROTATION_DEGREES = 4.2;
 const HAND_FAN_VERTICAL_OFFSET = 5;
+const DRAG_CARD_RETURN_MS = 260;
 
 const CARD_THEME: Record<Unit['type'], {
     accent: string;
@@ -112,13 +123,17 @@ const getAttackIcon = (type: Unit['type']): ReactElement => {
 };
 
 export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
+    const boardRootRef = useRef<HTMLDivElement>(null);
     const stageRef = useRef<HTMLDivElement>(null);
     const boardApiRef = useRef<BoardApi | null>(null);
     const dragImageRef = useRef<HTMLImageElement | null>(null);
+    const dragReturnTimeoutRef = useRef<number | null>(null);
+    const dropHandledRef = useRef<boolean>(false);
     const [isWaveRunning, setIsWaveRunning] = useState<boolean>(false);
     const [gold, setGold] = useState<number>(14);
     const [hand, setHand] = useState<Unit[]>(() => stage.drawUnitsFromReserve(6));
     const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
+    const [floatingDragCard, setFloatingDragCard] = useState<FloatingDragCard | null>(null);
     const [statusText, setStatusText] = useState<string>('Drag an elf card onto the field to place a defender.');
     const [packTemplates, setPackTemplates] = useState<UnitTemplate[]>([]);
     const [isOpeningPack, setIsOpeningPack] = useState<boolean>(false);
@@ -181,6 +196,15 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
         transition: 'transform 260ms ease',
         pointerEvents: interactionLocked ? 'none' as const : 'auto' as const,
     }), [interactionLocked]);
+
+    useEffect(() => {
+        return () => {
+            if (dragReturnTimeoutRef.current != null) {
+                window.clearTimeout(dragReturnTimeoutRef.current);
+                dragReturnTimeoutRef.current = null;
+            }
+        };
+    }, []);
 
     useEffect(() => {
         const refillHand = (): void => {
@@ -1356,9 +1380,108 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
         }
     };
 
+    const clearDragReturnTimeout = (): void => {
+        if (dragReturnTimeoutRef.current != null) {
+            window.clearTimeout(dragReturnTimeoutRef.current);
+            dragReturnTimeoutRef.current = null;
+        }
+    };
+
+    const getFloatingCardHoverPosition = (clientX: number, clientY: number): {x: number; y: number} | null => {
+        const boardBounds = boardRootRef.current?.getBoundingClientRect();
+        if (boardBounds == null) {
+            return null;
+        }
+
+        return {
+            x: clientX - boardBounds.left + DEFENDER_SPRITE_WIDTH * 0.6,
+            y: clientY - boardBounds.top - DEFENDER_SPRITE_HEIGHT * 0.56,
+        };
+    };
+
+    const updateFloatingCardFromPointer = (clientX: number, clientY: number): void => {
+        const position = getFloatingCardHoverPosition(clientX, clientY);
+        if (position == null) {
+            return;
+        }
+
+        setFloatingDragCard((current) => {
+            if (current == null || current.mode !== 'dragging') {
+                return current;
+            }
+
+            return {
+                ...current,
+                x: position.x,
+                y: position.y,
+            };
+        });
+    };
+
+    const animateFloatingCardBackToHand = (): void => {
+        clearDragReturnTimeout();
+        setFloatingDragCard((current) => {
+            if (current == null) {
+                return current;
+            }
+
+            return {
+                ...current,
+                mode: 'returning',
+                x: current.startX,
+                y: current.startY,
+            };
+        });
+
+        dragReturnTimeoutRef.current = window.setTimeout(() => {
+            setFloatingDragCard(null);
+            dragReturnTimeoutRef.current = null;
+        }, DRAG_CARD_RETURN_MS);
+    };
+
+    const resetCardDragState = (options?: {animateBack?: boolean}): void => {
+        clearDragImage();
+        setDraggingCardId(null);
+        boardApiRef.current?.clearPlacementPreview();
+
+        if (options?.animateBack === true) {
+            animateFloatingCardBackToHand();
+            return;
+        }
+
+        clearDragReturnTimeout();
+        setFloatingDragCard(null);
+    };
+
     const handleCardDragStart = (event: React.DragEvent<HTMLDivElement>, card: Unit): void => {
+        dropHandledRef.current = false;
         event.dataTransfer.setData('application/x-elf-card', card.id);
         setDraggingCardId(card.id);
+
+        const boardBounds = boardRootRef.current?.getBoundingClientRect();
+        const cardBounds = event.currentTarget.getBoundingClientRect();
+        const centerIndex = (hand.length - 1) / 2;
+        const cardIndex = hand.findIndex((candidate) => candidate.id === card.id);
+        const fanOffset = cardIndex - centerIndex;
+        const fanRotate = fanOffset * HAND_FAN_ROTATION_DEGREES;
+
+        if (boardBounds != null) {
+            const startX = cardBounds.left - boardBounds.left;
+            const startY = cardBounds.top - boardBounds.top;
+            setFloatingDragCard({
+                card,
+                x: startX,
+                y: startY,
+                startX,
+                startY,
+                rotation: fanRotate,
+                mode: 'dragging',
+            });
+
+            window.requestAnimationFrame(() => {
+                updateFloatingCardFromPointer(event.clientX, event.clientY);
+            });
+        }
 
         clearDragImage();
 
@@ -1381,32 +1504,35 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
 
     const handleDrop = (event: React.DragEvent<HTMLDivElement>): void => {
         event.preventDefault();
-        clearDragImage();
-        setDraggingCardId(null);
-        boardApiRef.current?.clearPlacementPreview();
+        dropHandledRef.current = true;
 
         if (interactionLocked) {
+            resetCardDragState({animateBack: true});
             setStatusText('Cannot deploy while gameplay is paused.');
             return;
         }
 
         const payload = event.dataTransfer.getData('application/x-elf-card');
         if (!payload) {
+            resetCardDragState({animateBack: true});
             return;
         }
 
         const droppedCard = hand.find((card) => card.id === payload);
         if (droppedCard == null) {
+            resetCardDragState({animateBack: true});
             return;
         }
 
         if (gold < droppedCard.cost) {
+            resetCardDragState({animateBack: true});
             setStatusText(`Not enough gold for ${droppedCard.name}. Need ${droppedCard.cost}.`);
             return;
         }
 
         const stageBounds = stageRef.current?.getBoundingClientRect();
         if (stageBounds == null) {
+            resetCardDragState({animateBack: true});
             return;
         }
 
@@ -1415,9 +1541,12 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
         const placed = boardApiRef.current?.placeDefender(droppedCard, x, y) ?? false;
 
         if (!placed) {
+            resetCardDragState({animateBack: true});
             setStatusText('Cannot place here. Move to an open battlefield position.');
             return;
         }
+
+        resetCardDragState();
 
         setGold((current) => current - droppedCard.cost);
         setHand((current) => {
@@ -1429,7 +1558,161 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
         playVoiceLine(droppedCard.deployLineUrl);
     };
 
+    const renderCardInner = (card: Unit, theme: typeof CARD_THEME[Unit['type']]): ReactElement => {
+        return <>
+            <div style={{
+                position: 'absolute',
+                inset: 0,
+                backgroundImage: `url(${card.imageUrl})`,
+                backgroundPosition: 'center 30%',
+                backgroundSize: 'cover',
+                backgroundRepeat: 'no-repeat',
+                opacity: 0.16,
+                filter: 'saturate(0.95)',
+                pointerEvents: 'none',
+            }}/>
+
+            <div style={{
+                position: 'absolute',
+                top: 12,
+                left: 10,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 3,
+                background: 'rgba(15, 23, 42, 0.88)',
+                border: `1px solid ${theme.accent}`,
+                borderRadius: 999,
+                padding: '3px 7px',
+                color: '#fef9c3',
+                fontSize: 12,
+                fontWeight: 700,
+                letterSpacing: 0.2,
+                zIndex: 2,
+            }}>
+                <PaidRoundedIcon style={{fontSize: 13}}/>
+                {card.cost}
+            </div>
+
+            <div style={{
+                position: 'absolute',
+                top: 12,
+                right: 10,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 6,
+                zIndex: 2,
+            }}>
+                <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 4,
+                    minWidth: 26,
+                    color: '#fde68a',
+                    fontSize: 12,
+                    fontWeight: 700,
+                }}>
+                    {getAttackIcon(card.type)}
+                    <span>{card.attack}</span>
+                </div>
+                <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 4,
+                    minWidth: 26,
+                    color: '#fecaca',
+                    fontSize: 12,
+                    fontWeight: 700,
+                }}>
+                    <FavoriteRoundedIcon style={{fontSize: 14}}/>
+                    <span>{card.health}</span>
+                </div>
+                {card.shield > 0 ? <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 4,
+                    minWidth: 26,
+                    color: '#bae6fd',
+                    fontSize: 12,
+                    fontWeight: 700,
+                }}>
+                    <ShieldRoundedIcon style={{fontSize: 14}}/>
+                    <span>{card.shield}</span>
+                </div> : null}
+            </div>
+
+            <div style={{
+                width: '90%',
+                marginLeft: '5%',
+                height: 186,
+                borderRadius: 10,
+                backgroundImage: `url(${card.portraitUrl})`,
+                backgroundPosition: 'center 20%',
+                backgroundSize: 'cover',
+                border: `1px solid ${theme.accent}`,
+                marginBottom: 10,
+                position: 'relative',
+                zIndex: 1,
+            }}/>
+            <div style={{
+                fontSize: 15,
+                fontWeight: 700,
+                lineHeight: 1.1,
+                marginBottom: 6,
+                fontFamily: 'Georgia, Times New Roman, serif',
+                textShadow: '0 1px 8px rgba(15, 23, 42, 0.75)',
+                position: 'relative',
+                zIndex: 1,
+            }}>
+                {card.name}
+            </div>
+
+            <div style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                marginBottom: 8,
+                fontSize: 11,
+                fontWeight: 600,
+                color: '#e2e8f0',
+                textTransform: 'uppercase',
+                letterSpacing: 0.6,
+                position: 'relative',
+                zIndex: 1,
+            }}>
+                <span style={{
+                    borderRadius: 999,
+                    border: `1px solid ${theme.accent}`,
+                    color: theme.accent,
+                    padding: '2px 6px',
+                    background: 'rgba(2, 6, 23, 0.5)',
+                }}>
+                    {card.type}
+                </span>
+                <span>{theme.attackLabel}</span>
+            </div>
+
+            <div style={{
+                marginTop: 'auto',
+                borderTop: `1px solid ${theme.accentSoft}`,
+                paddingTop: 8,
+                minHeight: 38,
+                fontSize: 11,
+                color: '#cbd5e1',
+                lineHeight: 1.35,
+                fontStyle: 'italic',
+                position: 'relative',
+                zIndex: 1,
+            }}>
+                {card.flavor || theme.flavor}
+            </div>
+        </>;
+    };
+
     return <div
+        ref={boardRootRef}
         style={{position: 'relative', width: '100%', height: '100%'}}
         onDragOver={(event) => {
             event.preventDefault();
@@ -1438,6 +1721,8 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 boardApiRef.current?.clearPlacementPreview();
                 return;
             }
+
+            updateFloatingCardFromPointer(event.clientX, event.clientY);
 
             const draggedCard = hand.find((card) => card.id === draggingCardId);
             const stageBounds = stageRef.current?.getBoundingClientRect();
@@ -1561,6 +1846,7 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 const affordable = gold >= card.cost;
                 const theme = CARD_THEME[card.type];
                 const isDraggingCard = draggingCardId === card.id;
+                const isFloatingCard = floatingDragCard?.card.id === card.id;
                 const centerIndex = (hand.length - 1) / 2;
                 const fanOffset = index - centerIndex;
                 const fanRotate = fanOffset * HAND_FAN_ROTATION_DEGREES;
@@ -1589,7 +1875,7 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                     padding: '10px 12px 10px 12px',
                     fontFamily: 'Inter, Arial, sans-serif',
                     cursor: affordable ? 'grab' : 'not-allowed',
-                    opacity: affordable ? 1 : 0.7,
+                    opacity: isFloatingCard ? 0 : (affordable ? 1 : 0.7),
                     position: 'relative',
                     display: 'flex',
                     flexDirection: 'column',
@@ -1609,163 +1895,57 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                     draggable={!interactionLocked && affordable}
                     onDragStart={(event) => handleCardDragStart(event, card)}
                     onDragEnd={() => {
-                        clearDragImage();
-                        setDraggingCardId(null);
-                        boardApiRef.current?.clearPlacementPreview();
+                        if (!dropHandledRef.current) {
+                            resetCardDragState({animateBack: true});
+                        }
+
+                        dropHandledRef.current = false;
                     }}
                     style={cardStyle}
                 >
-                    <div style={{
-                        position: 'absolute',
-                        inset: 0,
-                        backgroundImage: `url(${card.imageUrl})`,
-                        backgroundPosition: 'center 30%',
-                        backgroundSize: 'cover',
-                        backgroundRepeat: 'no-repeat',
-                        opacity: 0.16,
-                        filter: 'saturate(0.95)',
-                        pointerEvents: 'none',
-                    }}/>
-
-                    <div style={{
-                        position: 'absolute',
-                        top: 12,
-                        left: 10,
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 3,
-                        background: 'rgba(15, 23, 42, 0.88)',
-                        border: `1px solid ${theme.accent}`,
-                        borderRadius: 999,
-                        padding: '3px 7px',
-                        color: '#fef9c3',
-                        fontSize: 12,
-                        fontWeight: 700,
-                        letterSpacing: 0.2,
-                        zIndex: 1,
-                    }}>
-                        <PaidRoundedIcon style={{fontSize: 13}}/>
-                        {card.cost}
-                    </div>
-
-                    <div style={{
-                        position: 'absolute',
-                        top: 12,
-                        right: 10,
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 6,
-                        zIndex: 1,
-                    }}>
-                        <div style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            gap: 4,
-                            minWidth: 26,
-                            color: '#fde68a',
-                            fontSize: 12,
-                            fontWeight: 700,
-                        }}>
-                            {getAttackIcon(card.type)}
-                            <span>{card.attack}</span>
-                        </div>
-                        <div style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            gap: 4,
-                            minWidth: 26,
-                            color: '#fecaca',
-                            fontSize: 12,
-                            fontWeight: 700,
-                        }}>
-                            <FavoriteRoundedIcon style={{fontSize: 14}}/>
-                            <span>{card.health}</span>
-                        </div>
-                        {card.shield > 0 ? <div style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            gap: 4,
-                            minWidth: 26,
-                            color: '#bae6fd',
-                            fontSize: 12,
-                            fontWeight: 700,
-                        }}>
-                            <ShieldRoundedIcon style={{fontSize: 14}}/>
-                            <span>{card.shield}</span>
-                        </div> : null}
-                    </div>
-
-                    <div style={{
-                        width: 'calc(100% + 20px)',
-                        marginLeft: -10,
-                        height: 186,
-                        borderRadius: 10,
-                        backgroundImage: `url(${card.portraitUrl})`,
-                        backgroundPosition: 'center 20%',
-                        backgroundSize: 'cover',
-                        border: `1px solid ${theme.accent}`,
-                        marginBottom: 10,
-                        position: 'relative',
-                        zIndex: 1,
-                    }}/>
-                    <div style={{
-                        fontSize: 15,
-                        fontWeight: 700,
-                        lineHeight: 1.1,
-                        marginBottom: 6,
-                        fontFamily: 'Georgia, Times New Roman, serif',
-                        textShadow: '0 1px 8px rgba(15, 23, 42, 0.75)',
-                        position: 'relative',
-                        zIndex: 1,
-                    }}>
-                        {card.name}
-                    </div>
-
-                    <div style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 6,
-                        marginBottom: 8,
-                        fontSize: 11,
-                        fontWeight: 600,
-                        color: '#e2e8f0',
-                        textTransform: 'uppercase',
-                        letterSpacing: 0.6,
-                        position: 'relative',
-                        zIndex: 1,
-                    }}>
-                        <span style={{
-                            borderRadius: 999,
-                            border: `1px solid ${theme.accent}`,
-                            color: theme.accent,
-                            padding: '2px 6px',
-                            background: 'rgba(2, 6, 23, 0.5)',
-                        }}>
-                            {card.type}
-                        </span>
-                        <span>{theme.attackLabel}</span>
-                    </div>
-
-                    <div style={{
-                        marginTop: 'auto',
-                        borderTop: `1px solid ${theme.accentSoft}`,
-                        paddingTop: 8,
-                        minHeight: 38,
-                        fontSize: 11,
-                        color: '#cbd5e1',
-                        lineHeight: 1.35,
-                        fontStyle: 'italic',
-                        position: 'relative',
-                        zIndex: 1,
-                    }}>
-                        {card.flavor || theme.flavor}
-                    </div>
+                    {renderCardInner(card, theme)}
                 </div>;
             })}
         </div>
+
+        {floatingDragCard != null ? (() => {
+            const floatingTheme = CARD_THEME[floatingDragCard.card.type];
+            const floatingStyle: CSSProperties & Record<string, string | number> = {
+                width: 172,
+                minHeight: 340,
+                borderRadius: 14,
+                border: `2px solid ${floatingTheme.accent}`,
+                background: `
+                        linear-gradient(160deg, rgba(17, 24, 39, 0.9), rgba(15, 23, 42, 0.82)),
+                        repeating-linear-gradient(
+                            135deg,
+                            ${floatingTheme.accentSoft} 0px,
+                            ${floatingTheme.accentSoft} 2px,
+                            rgba(15, 23, 42, 0.1) 2px,
+                            rgba(15, 23, 42, 0.1) 8px
+                        )
+                    `,
+                boxShadow: `0 18px 32px rgba(2, 6, 23, 0.55), 0 0 0 1px ${floatingTheme.accentSoft} inset`,
+                color: '#f8fafc',
+                padding: '10px 12px 10px 12px',
+                fontFamily: 'Inter, Arial, sans-serif',
+                position: 'absolute',
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'flex-start',
+                zIndex: 220,
+                transform: `translate3d(${floatingDragCard.x}px, ${floatingDragCard.y}px, 0) rotate(${floatingDragCard.rotation}deg) scale(1.03)`,
+                transition: floatingDragCard.mode === 'returning'
+                    ? `transform ${DRAG_CARD_RETURN_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`
+                    : 'transform 90ms linear',
+                pointerEvents: 'none',
+                overflow: 'hidden',
+            };
+
+            return <div style={floatingStyle}>
+                {renderCardInner(floatingDragCard.card, floatingTheme)}
+            </div>;
+        })() : null}
 
         {isOpeningPack ? <UnitPackOpening
             templates={packTemplates}
