@@ -36,7 +36,7 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
         this.myInternalState = messageState != null ? messageState : {'someKey': 'someValue'};
         this.myInternalState['numUsers'] = Object.keys(users).length;
         this.myInternalState['numChars'] = Object.keys(characters).length;
-        this.startReserveTemplateLoading();
+        void this.startReserveTemplateLoading();
     }
 
     private notifyReserveListeners(): void {
@@ -45,7 +45,7 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
         }
     }
 
-    private startReserveTemplateLoading(): void {
+    private async startReserveTemplateLoading(): Promise<void> {
         if (this.reserveLoadingStarted) {
             return;
         }
@@ -54,7 +54,7 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
         this.reservePendingLoads = DEMO_FULL_PATHS.length;
 
         for (const fullPath of DEMO_FULL_PATHS) {
-            void this.loadTemplateIntoReserve(fullPath);
+            await this.loadTemplateIntoReserve(fullPath);
         }
     }
 

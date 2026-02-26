@@ -1,4 +1,4 @@
-import {ReactElement, useEffect, useMemo, useRef, useState} from "react";
+import {CSSProperties, ReactElement, useEffect, useMemo, useRef, useState} from "react";
 import {Application, Assets, Container, Graphics, Sprite, Text, TextStyle, TilingSprite, Texture} from "pixi.js";
 import {Unit, UnitTemplate} from "./Unit";
 import type {Stage} from "./Stage";
@@ -53,7 +53,7 @@ type Effect = {
 type BoardApi = {
     placeDefender: (card: Unit, x: number, y: number) => boolean;
     startWave: () => boolean;
-    updatePlacementPreview: (card: Unit, x: number, y: number) => void;
+    updatePlacementPreview: (card: Unit, x: number, y: number, ignoreDefenderId?: string) => void;
     clearPlacementPreview: () => void;
 };
 
@@ -70,6 +70,8 @@ const GRID_TILE_MIN = 60;
 const GRID_TILE_MAX = 120;
 const GRID_UPWARD_SHIFT_RATIO = 0.08;
 const ENEMY_MOVE_DURATION_RATIO = 0.78;
+const HAND_FAN_ROTATION_DEGREES = 4.2;
+const HAND_FAN_VERTICAL_OFFSET = 5;
 
 const CARD_THEME: Record<Unit['type'], {
     accent: string;
@@ -172,7 +174,7 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
         bottom: 0,
         padding: '12px 14px 14px 14px',
         display: 'flex',
-        gap: 10,
+        gap: 4,
         justifyContent: 'center',
         alignItems: 'flex-end',
         transform: interactionLocked ? 'translateY(120%)' : 'translateY(0)',
@@ -272,6 +274,7 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
             const effects: Effect[] = [];
             let placementPreview: Graphics | null = null;
             let placementPreviewType: Unit['type'] | null = null;
+            let draggingDefender: {defender: Defender; originRow: number; originCol: number} | null = null;
 
             const laneFractions = [0.2, 0.35, 0.5, 0.65, 0.8];
             const totalEnemiesInWave = 12;
@@ -641,7 +644,8 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 sprite.anchor.set(0.5, 1);
                 sprite.width = gridTileSize;
                 sprite.height = gridTileSize * 1.28;
-                sprite.eventMode = 'none';
+                sprite.eventMode = 'static';
+                sprite.cursor = 'grab';
 
                 void Assets.load(card.imageUrl)
                     .then((texture) => {
@@ -726,10 +730,31 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
 
                 defenders.push(defender);
                 syncDefenderVisual(defender);
+
+                sprite.on('pointerdown', (event) => {
+                    if (waveInProgress || draggingDefender != null) {
+                        return;
+                    }
+
+                    draggingDefender = {
+                        defender,
+                        originRow: defender.row,
+                        originCol: defender.col,
+                    };
+                    sprite.alpha = 0.82;
+                    sprite.cursor = 'grabbing';
+
+                    updatePlacementPreview(defender.card, event.global.x, event.global.y, defender.id);
+                });
             };
 
-            const canPlaceAtTile = (row: number, col: number): boolean => {
-                return getDefenderAt(row, col) == null;
+            const canPlaceAtTile = (row: number, col: number, ignoreDefenderId?: string): boolean => {
+                const occupant = getDefenderAt(row, col);
+                if (occupant == null) {
+                    return true;
+                }
+
+                return ignoreDefenderId != null && occupant.id === ignoreDefenderId;
             };
 
             const clearPlacementPreview = (): void => {
@@ -740,7 +765,7 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 }
             };
 
-            const updatePlacementPreview = (card: Unit, x: number, y: number): void => {
+            const updatePlacementPreview = (card: Unit, x: number, y: number, ignoreDefenderId?: string): void => {
                 if (waveInProgress) {
                     clearPlacementPreview();
                     return;
@@ -752,7 +777,7 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                     return;
                 }
 
-                const placeable = canPlaceAtTile(tile.row, tile.col);
+                const placeable = canPlaceAtTile(tile.row, tile.col, ignoreDefenderId);
                 const center = getTileCenter(tile.row, tile.col);
 
                 if (placementPreview == null || placementPreviewType !== card.type) {
@@ -782,6 +807,9 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
 
             const removeDefender = (index: number): void => {
                 const defender = defenders[index];
+                if (draggingDefender?.defender.id === defender.id) {
+                    draggingDefender = null;
+                }
                 defender.sprite.destroy();
                 defender.rangeCircle?.destroy();
                 defender.rangeCone?.destroy();
@@ -1140,6 +1168,82 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 return true;
             };
 
+            const finalizeDefenderDrag = (x: number, y: number): void => {
+                if (draggingDefender == null) {
+                    return;
+                }
+
+                const {defender, originRow, originCol} = draggingDefender;
+                draggingDefender = null;
+
+                defender.sprite.alpha = 1;
+                defender.sprite.cursor = 'grab';
+
+                const tile = tileFromWorld(x, y);
+                const canDrop = !waveInProgress
+                    && tile != null
+                    && canPlaceAtTile(tile.row, tile.col, defender.id);
+
+                if (canDrop && tile != null) {
+                    defender.row = tile.row;
+                    defender.col = tile.col;
+
+                    if (defender.card.type === 'ranged' && defender.rangeCone != null) {
+                        defender.rangeCone.clear();
+                        const rowLength = (gridCols - defender.col) * gridTileSize;
+                        defender.rangeCone.rect(0, -gridTileSize / 2 + 2, rowLength, gridTileSize - 4);
+                        defender.rangeCone.fill({color: 0x60a5fa, alpha: 0.08});
+                        defender.rangeCone.stroke({width: 2, color: 0x60a5fa, alpha: 0.28});
+                    }
+                } else {
+                    defender.row = originRow;
+                    defender.col = originCol;
+                }
+
+                syncDefenderVisual(defender);
+                updateDefenderPips(defender);
+                clearPlacementPreview();
+            };
+
+            app.stage.eventMode = 'static';
+            app.stage.hitArea = app.screen;
+            app.stage.on('pointermove', (event) => {
+                if (draggingDefender == null) {
+                    return;
+                }
+
+                const {defender} = draggingDefender;
+                const pointerX = event.global.x;
+                const pointerY = event.global.y;
+
+                defender.sprite.x = pointerX;
+                defender.sprite.y = pointerY + gridTileSize * 0.34;
+
+                if (defender.rangeCircle != null) {
+                    defender.rangeCircle.x = pointerX;
+                    defender.rangeCircle.y = pointerY;
+                }
+
+                if (defender.rangeCone != null) {
+                    defender.rangeCone.x = pointerX;
+                    defender.rangeCone.y = pointerY;
+                }
+
+                if (defender.shieldCircle != null) {
+                    defender.shieldCircle.x = pointerX;
+                    defender.shieldCircle.y = pointerY;
+                }
+
+                updateDefenderPips(defender);
+                updatePlacementPreview(defender.card, pointerX, pointerY, defender.id);
+            });
+            app.stage.on('pointerup', (event) => {
+                finalizeDefenderDrag(event.global.x, event.global.y);
+            });
+            app.stage.on('pointerupoutside', (event) => {
+                finalizeDefenderDrag(event.global.x, event.global.y);
+            });
+
             const resizeScene = (): void => {
                 grass.width = app.renderer.width;
                 grass.height = app.renderer.height;
@@ -1434,25 +1538,43 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
             {isGeneratingPack ? 'Opening...' : 'Open Pack'}
         </button>
 
+        <style>
+            {`
+                @keyframes td-card-idle {
+                    0% {
+                        transform: var(--card-base-transform) translate3d(0px, 0px, 0px);
+                    }
+
+                    52% {
+                        transform: var(--card-base-transform) translate3d(0.8px, -3px, 0px);
+                    }
+
+                    100% {
+                        transform: var(--card-base-transform) translate3d(-0.9px, -1.2px, 0px);
+                    }
+                }
+            `}
+        </style>
+
         <div style={handStyle}>
-            {hand.map((card) => {
+            {hand.map((card, index) => {
                 const affordable = gold >= card.cost;
                 const theme = CARD_THEME[card.type];
-                return <div
-                    key={card.id}
-                    draggable={!interactionLocked && affordable}
-                    onDragStart={(event) => handleCardDragStart(event, card)}
-                    onDragEnd={() => {
-                        clearDragImage();
-                        setDraggingCardId(null);
-                        boardApiRef.current?.clearPlacementPreview();
-                    }}
-                    style={{
-                        width: 172,
-                        minHeight: 340,
-                        borderRadius: 14,
-                        border: `2px solid ${affordable ? theme.accent : 'rgba(248, 113, 113, 0.75)'}`,
-                        background: `
+                const isDraggingCard = draggingCardId === card.id;
+                const centerIndex = (hand.length - 1) / 2;
+                const fanOffset = index - centerIndex;
+                const fanRotate = fanOffset * HAND_FAN_ROTATION_DEGREES;
+                const fanY = Math.abs(fanOffset) * HAND_FAN_VERTICAL_OFFSET;
+                const fanX = fanOffset * -3;
+                const baseTransform = isDraggingCard
+                    ? `translate3d(${fanX}px, ${fanY - 10}px, 0) rotate(${fanRotate}deg) scale(1.03)`
+                    : `translate3d(${fanX}px, ${fanY}px, 0) rotate(${fanRotate}deg)`;
+                const cardStyle: CSSProperties & Record<string, string | number> = {
+                    width: 172,
+                    minHeight: 340,
+                    borderRadius: 14,
+                    border: `2px solid ${affordable ? theme.accent : 'rgba(248, 113, 113, 0.75)'}`,
+                    background: `
                             linear-gradient(160deg, rgba(17, 24, 39, 0.9), rgba(15, 23, 42, 0.82)),
                             repeating-linear-gradient(
                                 135deg,
@@ -1462,18 +1584,36 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                                 rgba(15, 23, 42, 0.1) 8px
                             )
                         `,
-                        boxShadow: `0 8px 20px rgba(2, 6, 23, 0.45), 0 0 0 1px ${theme.accentSoft} inset`,
-                        color: '#f8fafc',
-                        padding: '10px 42px 10px 10px',
-                        fontFamily: 'Inter, Arial, sans-serif',
-                        cursor: affordable ? 'grab' : 'not-allowed',
-                        opacity: affordable ? 1 : 0.7,
-                        position: 'relative',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        justifyContent: 'flex-start',
-                        overflow: 'hidden',
+                    boxShadow: `0 8px 20px rgba(2, 6, 23, 0.45), 0 0 0 1px ${theme.accentSoft} inset`,
+                    color: '#f8fafc',
+                    padding: '10px 12px 10px 12px',
+                    fontFamily: 'Inter, Arial, sans-serif',
+                    cursor: affordable ? 'grab' : 'not-allowed',
+                    opacity: affordable ? 1 : 0.7,
+                    position: 'relative',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'flex-start',
+                    marginLeft: index === 0 ? 0 : -28,
+                    zIndex: 100 + index - Math.round(Math.abs(fanOffset) * 10),
+                    transform: 'var(--card-base-transform)',
+                    animation: interactionLocked || isDraggingCard
+                        ? 'none'
+                        : `td-card-idle ${5.2 + (index % 3) * 0.9}s ease-in-out ${-index * 0.7}s infinite alternate`,
+                    transition: 'transform 220ms ease, box-shadow 220ms ease, opacity 220ms ease',
+                    overflow: 'hidden',
+                    ['--card-base-transform']: baseTransform,
+                };
+                return <div
+                    key={card.id}
+                    draggable={!interactionLocked && affordable}
+                    onDragStart={(event) => handleCardDragStart(event, card)}
+                    onDragEnd={() => {
+                        clearDragImage();
+                        setDraggingCardId(null);
+                        boardApiRef.current?.clearPlacementPreview();
                     }}
+                    style={cardStyle}
                 >
                     <div style={{
                         position: 'absolute',
@@ -1489,8 +1629,8 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
 
                     <div style={{
                         position: 'absolute',
-                        top: 8,
-                        left: 8,
+                        top: 12,
+                        left: 10,
                         display: 'inline-flex',
                         alignItems: 'center',
                         gap: 3,
@@ -1510,8 +1650,8 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
 
                     <div style={{
                         position: 'absolute',
-                        top: 36,
-                        right: 8,
+                        top: 12,
+                        right: 10,
                         display: 'flex',
                         flexDirection: 'column',
                         gap: 6,
@@ -1559,14 +1699,15 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                     </div>
 
                     <div style={{
-                        width: '100%',
-                        height: 162,
-                        borderRadius: 8,
+                        width: 'calc(100% + 20px)',
+                        marginLeft: -10,
+                        height: 186,
+                        borderRadius: 10,
                         backgroundImage: `url(${card.portraitUrl})`,
-                        backgroundPosition: 'top center',
+                        backgroundPosition: 'center 20%',
                         backgroundSize: 'cover',
                         border: `1px solid ${theme.accent}`,
-                        marginBottom: 8,
+                        marginBottom: 10,
                         position: 'relative',
                         zIndex: 1,
                     }}/>

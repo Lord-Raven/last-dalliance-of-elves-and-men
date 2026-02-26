@@ -1,4 +1,3 @@
-import parse from "parse-svg-path";
 import type { Stage } from "./Stage";
 
 export type UnitType = 'melee' | 'ranged' | 'magic';
@@ -157,14 +156,41 @@ const baseImages: PortraitMatrix = {
 };
 
 export const DEMO_FULL_PATHS: ReadonlyArray<string> = [
-    'Happy_Spanker/gilleandra-therys-f8b0da874905',
+    /*'Happy_Spanker/gilleandra-therys-f8b0da874905',
     'JakeH/merritrix-f72f6a2bab0a',
     'Happy_Spanker/aelara-veylin-3286274bad6b',
     'Happy_Spanker/elfie-elvenson-75bdd03bad56',
     'Happy_Spanker/crysthea-hellon-ebe30800bba3',
     'Happy_Spanker/eliara-2eaaa1e0cdd4',
     'JakeH/kalariel-ebonheart-a3388e951164',
-    'Happy_Spanker/ena-riallath-69d68f3dcafb'
+    'Happy_Spanker/ena-riallath-69d68f3dcafb',*/
+    'ErlkingC/ishe-dark-elf-assassin-077f6ba2962a',
+    'Boy_Next_Door/nyrissa-the-runaway-slave-b376f6d5862c',
+    'miyo_rin/sylvanetta-disaster-princess-15906b408451',
+    'Kapot/Tittyana',
+    'qwerty213/princess-elanore-7b56d66a',
+    'turnip/hraide-3fc924ae',
+    '_DeiV_/lyrei-the-failure-f-rank-is-a-cute-wood-elf-huntress-01a37a47dc6a',
+    'EclispedHonor/ava-your-formerly-timid-best-friend-turned-popular-and-resentful-ap-15-0158d0964b77',
+    'arachnutron/aubree-elven-emissary-9924cca42442',
+    'miyo_rin/cleia-corporate-inquisitor-ef0f5f1c0b24',
+    'Sugondees/claudia-5f243e9bfcdb',
+    'BackdoorBarry/shortstack-neighbour-2dad6bb7',
+    'xXxecksxXxD/amena-816f6eac597e',
+    'Sexiam/vex-the-elf-pet-it-s-complicated-3c7037bb5647',
+    'miyo_rin/nezraya-matron-mother-of-house-morvyth-19aea27c8346',
+    'statuotw/arryn-the-knight-5843a0ee',
+    'LilithVirty/lyssandra-the-ironwood-massacre-f191e66c0059',
+    'AnonBrier/lyndis-the-vengeful-rogue-mistwater-chronicles-16e26ef00c66',
+    '7leaf/claire-your-elf-mother-c304f9906eb7',
+    'Sexiam/seraphis-darkspire-captured-elf-princess-spoils-of-war-3bbfa54a8921',
+    'statuotw/shelara-the-elven-slave-3155631e',
+    'marcnen/miriel-royal-handmaiden-74986d9734cd',
+    'overheaven31/nylith-elven-diplomat-0e1ff181f6c3',
+    'Exmortis/imra-aegis-vanguard-rescue-savior-version-f9b4102c287a',
+    'MoistCrow_/neia-the-elf-267ab661',
+    'DoktorB/kuroeda-0036c4f3',
+    'Tearlament7/elf-slave-shana-40b0e01d30d4'
 ];
 
 export const getElfPortrait = (type: UnitType, bodyType: BodyType, hairType: HairType): string => {
@@ -374,7 +400,7 @@ export async function loadReserveUnitTemplate(data: any, stage: Stage): Promise<
             `\n\nThe Original Details below describe an elf or scenario (${data.name}) to convert into one of these cards, representing a unit on the battlefield. ` +
             `This request and response must digest and distill these details to suit the game's narrative scenario, ` +
             `crafting a unit who is prepared to fight for the elven homeland. First, determine the best suited unit type: Ranged (bow and arrow), Melee (sword), or Magic (staff). ` +
-            `Then choose revisions to their attire that would be more combat-suited while still reflecting their original character traits and style.` +
+            `Describe the characters physical appearance: skin tone, hair color/style, eye color, outfit, and other distinguishing features.` +
             `\n\n` +
             `The provided Original Details may reference 'Individual X' who was a part of their original background; ` +
             `if Individual X remains relevant to this character, Individual X should be replaced with an appropriate name in the distillation below.\n\n` +
@@ -419,6 +445,34 @@ export async function loadReserveUnitTemplate(data: any, stage: Stage): Promise<
     console.log('Generated character distillation:');
     console.log(generatedResponse);
     const parsedData = parseStructuredFields(generatedResponse?.result);
+
+    // Generate image prompt based on description. Use the description from above and prompt a bullet-pointed breakdown of key features for a concise image prompt.
+    const imagePromptResponse = await stage.generator.textGen({
+        prompt: `{{messages}}This is a preparatory request for generating an image prompt based on a character description. ` +
+            `The character description is intended to be used for generating a portrait image of a character in a tower-defense strategy game. ` +
+            `The description may include details about the character's physical appearance, attire, and distinguishing features. ` +
+            `Your task is to analyze the provided character description and extract key visual elements that can be used to create a concise and effective image prompt for an AI image generator. ` +
+            `Focus on identifying specific attributes such as clothing style, color scheme, accessories, facial features, and any unique characteristics mentioned in the description. ` +
+            `The output should be a bullet-pointed list of these key visual elements that can guide the creation of the character's portrait.\n\n` +
+            `Character Description:\n${parsedData['description'] || ''}\n\n` +
+            `Example Output:\n` +
+            `- Tall, athletic build\n` +
+            `- Short, dark hair\n` +
+            `- Piercing blue eyes\n` +
+            `- Simple, utilitarian outfit made from durable materials\n` +
+            `- Confident and determined expression\n` +
+            `- Combat boots\n` +
+            `#END#`,
+        stop: ['#END#'],
+        include_history: true,
+        max_tokens: 150,
+    });
+    console.log('Generated image prompt breakdown:');
+    console.log(imagePromptResponse);
+    const imagePrompt = (imagePromptResponse?.result || '').split('\n').map(line => line.replace(/^-+\s*/, '').trim()).filter(line => line.length > 0).join(', ') || parsedData['description'] || '';
+
+
+
 
     const quotesResponse = await stage.generator.textGen({
         prompt: `{{messages}}This is a follow-up request for short in-game situational character voice lines.` +
@@ -495,7 +549,7 @@ export async function loadReserveUnitTemplate(data: any, stage: Stage): Promise<
         deathLineUrl: quoteUrls['deathline'],
     };
 
-    newUnitTemplate.imageUrl = await generateUnitImage(newUnitTemplate, stage);
+    newUnitTemplate.imageUrl = await generateUnitImage(newUnitTemplate, imagePrompt, stage);
 
     console.log(`Loaded new unit template: ${newUnitTemplate.name}`);
     console.log(newUnitTemplate);
@@ -533,14 +587,14 @@ export async function loadReserveUnitTemplate(data: any, stage: Stage): Promise<
     return newUnitTemplate;
 }
 
-async function generateUnitImage(unitTemplate: UnitTemplate, stage: Stage): Promise<string> {
-    console.log(`Generating image for unit ${unitTemplate.name}`);
+async function generateUnitImage(unitTemplate: UnitTemplate, imagePrompt: string, stage: Stage): Promise<string> {
+    console.log(`Generating image for unit ${unitTemplate.name}: ${imagePrompt}`);
 
     try {
         const newImageUrl = (await stage.generator.imageToImage(
             {
                 image: unitTemplate.imageUrl,
-                prompt: `Update this character's outfit and appearance to match this description: ${unitTemplate.description}\n` +
+                prompt: `Update this character's outfit and appearance:\n${imagePrompt}\n` +
                 `Maintain the existing art style and white outline.`,
                 transfer_type: 'edit'
             }))?.url ?? unitTemplate.imageUrl;
