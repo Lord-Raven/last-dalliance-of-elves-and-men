@@ -1,6 +1,14 @@
 import {ReactElement, useEffect, useMemo, useRef, useState} from "react";
 import {Application, Assets, Container, Graphics, Sprite, Text, TextStyle, TilingSprite, Texture} from "pixi.js";
-import {Card, drawHand} from "./Unit";
+import {Unit, UnitTemplate} from "./Unit";
+import type {Stage} from "./Stage";
+import {UnitPackOpening} from "./UnitPackOpening";
+import PaidRoundedIcon from '@mui/icons-material/PaidRounded';
+import FavoriteRoundedIcon from '@mui/icons-material/FavoriteRounded';
+import ShieldRoundedIcon from '@mui/icons-material/ShieldRounded';
+import GavelRoundedIcon from '@mui/icons-material/GavelRounded';
+import TrackChangesRoundedIcon from '@mui/icons-material/TrackChangesRounded';
+import AutoFixHighRoundedIcon from '@mui/icons-material/AutoFixHighRounded';
 
 type Enemy = {
     id: string;
@@ -11,13 +19,14 @@ type Enemy = {
     cooldown: number;
     hp: number;
     maxHp: number;
+    lastHitByDefenderId: string | null;
     healthBarBg: Graphics;
     healthBar: Graphics;
 };
 
 type Defender = {
     id: string;
-    card: Card;
+    card: Unit;
     sprite: Sprite;
     hp: number;
     maxHp: number;
@@ -40,8 +49,10 @@ type Effect = {
 };
 
 type BoardApi = {
-    placeDefender: (card: Card, x: number, y: number) => boolean;
+    placeDefender: (card: Unit, x: number, y: number) => boolean;
     startWave: () => boolean;
+    updatePlacementPreview: (card: Unit, x: number, y: number) => void;
+    clearPlacementPreview: () => void;
 };
 
 
@@ -55,17 +66,104 @@ const ENEMY_MAX_VERTICAL_DRIFT = 0.32;
 const DEFENDER_SPRITE_WIDTH = 200;
 const DEFENDER_SPRITE_HEIGHT = 300;
 const DEFENDER_HALF_WIDTH = DEFENDER_SPRITE_WIDTH / 2;
-const DEFENDER_HALF_HEIGHT = DEFENDER_SPRITE_HEIGHT / 2;
-const DEFENDER_BAR_Y_OFFSET = DEFENDER_HALF_HEIGHT + 18;
+const DEFENDER_BAR_Y_OFFSET = DEFENDER_SPRITE_HEIGHT + 18;
+const KILL_LINE_CHANCE = 0.28;
+const VOICE_LINE_MIN_GAP_MS = 1000;
+const PACK_SIZE = 3;
 
-export const TowerDefenseBoard = (): ReactElement => {
+const CARD_THEME: Record<Unit['type'], {
+    accent: string;
+    accentSoft: string;
+    attackLabel: string;
+    flavor: string;
+}> = {
+    melee: {
+        accent: '#34d399',
+        accentSoft: 'rgba(52, 211, 153, 0.2)',
+        attackLabel: 'Blade',
+        flavor: 'A living bulwark of bark and steel.',
+    },
+    ranged: {
+        accent: '#60a5fa',
+        accentSoft: 'rgba(96, 165, 250, 0.2)',
+        attackLabel: 'Arrow',
+        flavor: 'Wind-guided volleys from the treeline.',
+    },
+    magic: {
+        accent: '#c084fc',
+        accentSoft: 'rgba(192, 132, 252, 0.2)',
+        attackLabel: 'Arcana',
+        flavor: 'Moonlit runes hum with ancient power.',
+    },
+};
+
+const getAttackIcon = (type: Unit['type']): ReactElement => {
+    if (type === 'melee') {
+        return <GavelRoundedIcon style={{fontSize: 14}}/>;
+    }
+
+    if (type === 'ranged') {
+        return <TrackChangesRoundedIcon style={{fontSize: 14}}/>;
+    }
+
+    return <AutoFixHighRoundedIcon style={{fontSize: 14}}/>;
+};
+
+export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
     const stageRef = useRef<HTMLDivElement>(null);
     const boardApiRef = useRef<BoardApi | null>(null);
     const dragImageRef = useRef<HTMLImageElement | null>(null);
     const [isWaveRunning, setIsWaveRunning] = useState<boolean>(false);
     const [gold, setGold] = useState<number>(14);
-    const [hand, setHand] = useState<Card[]>(() => drawHand(6));
+    const [hand, setHand] = useState<Unit[]>(() => stage.drawUnitsFromReserve(6));
+    const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
     const [statusText, setStatusText] = useState<string>('Drag an elf card onto the field to place a defender.');
+    const [packTemplates, setPackTemplates] = useState<UnitTemplate[]>([]);
+    const [isOpeningPack, setIsOpeningPack] = useState<boolean>(false);
+    const [isGeneratingPack, setIsGeneratingPack] = useState<boolean>(false);
+    const activeVoiceAudioRef = useRef<HTMLAudioElement | null>(null);
+    const lastVoicePlaybackAtRef = useRef<number>(0);
+    const interactionLocked = isWaveRunning || isOpeningPack || isGeneratingPack;
+
+    const playVoiceLine = (lineUrl: string | undefined, chance = 1): void => {
+        const sanitizedUrl = (lineUrl ?? '').trim();
+        if (!sanitizedUrl) {
+            return;
+        }
+
+        if (chance < 1 && Math.random() > chance) {
+            return;
+        }
+
+        const now = Date.now();
+        if (now - lastVoicePlaybackAtRef.current < VOICE_LINE_MIN_GAP_MS) {
+            return;
+        }
+
+        if (activeVoiceAudioRef.current != null) {
+            activeVoiceAudioRef.current.pause();
+            activeVoiceAudioRef.current = null;
+        }
+
+        const audio = new Audio(sanitizedUrl);
+        activeVoiceAudioRef.current = audio;
+        lastVoicePlaybackAtRef.current = now;
+        audio.onended = () => {
+            if (activeVoiceAudioRef.current === audio) {
+                activeVoiceAudioRef.current = null;
+            }
+        };
+        audio.onerror = () => {
+            if (activeVoiceAudioRef.current === audio) {
+                activeVoiceAudioRef.current = null;
+            }
+        };
+        void audio.play().catch(() => {
+            if (activeVoiceAudioRef.current === audio) {
+                activeVoiceAudioRef.current = null;
+            }
+        });
+    };
 
     const handStyle = useMemo(() => ({
         position: 'absolute' as const,
@@ -77,10 +175,32 @@ export const TowerDefenseBoard = (): ReactElement => {
         gap: 10,
         justifyContent: 'center',
         alignItems: 'flex-end',
-        transform: isWaveRunning ? 'translateY(120%)' : 'translateY(0)',
+        transform: interactionLocked ? 'translateY(120%)' : 'translateY(0)',
         transition: 'transform 260ms ease',
-        pointerEvents: isWaveRunning ? 'none' as const : 'auto' as const,
-    }), [isWaveRunning]);
+        pointerEvents: interactionLocked ? 'none' as const : 'auto' as const,
+    }), [interactionLocked]);
+
+    useEffect(() => {
+        const refillHand = (): void => {
+            setHand((current) => {
+                if (isWaveRunning || current.length >= 6) {
+                    return current;
+                }
+
+                const refill = stage.drawUnitsFromReserve(6 - current.length);
+                if (refill.length === 0) {
+                    return current;
+                }
+
+                return [...current, ...refill];
+            });
+        };
+
+        const unsubscribe = stage.subscribeReserveUpdates(refillHand);
+        refillHand();
+
+        return unsubscribe;
+    }, [isWaveRunning, stage]);
 
     useEffect(() => {
         const stageHost = stageRef.current;
@@ -96,7 +216,7 @@ export const TowerDefenseBoard = (): ReactElement => {
             await app.init({
                 resizeTo: stageHost,
                 antialias: true,
-                resolution: Math.max(1, window.devicePixelRatio || 1),
+                resolution: Math.max(2, window.devicePixelRatio || 1),
                 autoDensity: true,
                 backgroundAlpha: 0,
             });
@@ -108,6 +228,8 @@ export const TowerDefenseBoard = (): ReactElement => {
 
             stageHost.appendChild(app.canvas);
             app.canvas.style.imageRendering = 'auto';
+            app.canvas.style.setProperty('image-rendering', 'smooth');
+            app.canvas.style.setProperty('image-rendering', 'high-quality');
 
             const world = new Container();
             app.stage.addChild(world);
@@ -146,6 +268,8 @@ export const TowerDefenseBoard = (): ReactElement => {
             const enemies: Enemy[] = [];
             const defenders: Defender[] = [];
             const effects: Effect[] = [];
+            let placementPreview: Graphics | null = null;
+            let placementPreviewType: Unit['type'] | null = null;
 
             const laneFractions = [0.2, 0.35, 0.5, 0.65, 0.8];
             const totalEnemiesInWave = 12;
@@ -159,8 +283,11 @@ export const TowerDefenseBoard = (): ReactElement => {
                 return app.renderer.height * laneFractions[laneIndex];
             };
 
-            const damageEnemy = (enemy: Enemy, amount: number): void => {
+            const damageEnemy = (enemy: Enemy, amount: number, attacker?: Defender): void => {
                 enemy.hp = Math.max(0, enemy.hp - amount);
+                if (attacker != null) {
+                    enemy.lastHitByDefenderId = attacker.id;
+                }
             };
 
             const createArrowEffect = (startX: number, startY: number, endX: number, endY: number): void => {
@@ -324,6 +451,7 @@ export const TowerDefenseBoard = (): ReactElement => {
                     cooldown: 0,
                     hp: 110,
                     maxHp: 110,
+                    lastHitByDefenderId: null,
                     healthBarBg,
                     healthBar,
                 });
@@ -343,24 +471,38 @@ export const TowerDefenseBoard = (): ReactElement => {
                 enemy.healthBar.fill({color: 0x22c55e, alpha: 0.95});
             };
 
-            const spawnDefender = (card: Card, x: number, y: number): void => {
+            const spawnDefender = (card: Unit, x: number, y: number): void => {
                 const sprite = new Sprite(enemyTexture);
-                sprite.anchor.set(0.5);
+                sprite.anchor.set(0.5, 1);
                 sprite.width = DEFENDER_SPRITE_WIDTH;
                 sprite.height = DEFENDER_SPRITE_HEIGHT;
                 sprite.x = x;
                 sprite.y = y;
+                sprite.eventMode = 'static';
+                sprite.cursor = 'grab';
 
-                void Assets.load(card.portrait)
+                void Assets.load(card.imageUrl)
                     .then((texture) => {
                         if (sprite.destroyed) {
                             return;
                         }
 
                         const loadedTexture = texture as Texture;
-                        const sourceWithScaleMode = loadedTexture.source as unknown as {scaleMode?: 'nearest' | 'linear'};
+                        const sourceWithScaleMode = loadedTexture.source as unknown as {
+                            scaleMode?: 'nearest' | 'linear';
+                            autoGenerateMipmaps?: boolean;
+                            mipmap?: 'off' | 'on';
+                        };
                         if (sourceWithScaleMode.scaleMode != null) {
                             sourceWithScaleMode.scaleMode = 'linear';
+                        }
+
+                        if (sourceWithScaleMode.autoGenerateMipmaps != null) {
+                            sourceWithScaleMode.autoGenerateMipmaps = true;
+                        }
+
+                        if (sourceWithScaleMode.mipmap != null) {
+                            sourceWithScaleMode.mipmap = 'on';
                         }
 
                         sprite.texture = loadedTexture;
@@ -411,7 +553,7 @@ export const TowerDefenseBoard = (): ReactElement => {
                 }
 
                 defenderLayer.addChild(sprite);
-                defenders.push({
+                const defender: Defender = {
                     id: `def-${defenderCounter++}`,
                     card,
                     sprite,
@@ -426,7 +568,169 @@ export const TowerDefenseBoard = (): ReactElement => {
                     cooldown: 0,
                     rangeCircle,
                     rangeCone,
+                };
+
+                const syncDefenderVisuals = (): void => {
+                    if (defender.rangeCircle != null) {
+                        defender.rangeCircle.x = defender.sprite.x;
+                        defender.rangeCircle.y = defender.sprite.y;
+                    }
+
+                    if (defender.rangeCone != null) {
+                        defender.rangeCone.x = defender.sprite.x;
+                        defender.rangeCone.y = defender.sprite.y;
+                    }
+
+                    if (defender.shieldCircle != null) {
+                        defender.shieldCircle.x = defender.sprite.x;
+                        defender.shieldCircle.y = defender.sprite.y;
+                    }
+                };
+
+                let dragStartX = defender.sprite.x;
+                let dragStartY = defender.sprite.y;
+                let dragOffsetX = 0;
+                let dragOffsetY = 0;
+                let isDraggingDefender = false;
+
+                const getClampedPosition = (targetX: number, targetY: number): {x: number; y: number} => {
+                    const clampedX = Math.max(60, Math.min(app.renderer.width - 70, targetX));
+                    const clampedY = Math.max(DEFENDER_SPRITE_HEIGHT + 20, Math.min(app.renderer.height - 20, targetY));
+                    const clampedSafeX = Math.max(DEFENDER_HALF_WIDTH + 10, Math.min(app.renderer.width - DEFENDER_HALF_WIDTH - 10, clampedX));
+                    return {x: clampedSafeX, y: clampedY};
+                };
+
+                const canMoveDefender = (targetX: number, targetY: number): boolean => {
+                    return !defenders.some((otherDefender) => {
+                        if (otherDefender.id === defender.id) {
+                            return false;
+                        }
+
+                        const dx = otherDefender.sprite.x - targetX;
+                        const dy = otherDefender.sprite.y - targetY;
+                        return (dx * dx + dy * dy) < (216 * 216);
+                    });
+                };
+
+                const endDefenderDrag = (): void => {
+                    if (!isDraggingDefender) {
+                        return;
+                    }
+
+                    isDraggingDefender = false;
+                    sprite.alpha = 1;
+
+                    const currentX = defender.sprite.x;
+                    const currentY = defender.sprite.y;
+                    const validPosition = canMoveDefender(currentX, currentY);
+
+                    if (!validPosition) {
+                        defender.sprite.x = dragStartX;
+                        defender.sprite.y = dragStartY;
+                        syncDefenderVisuals();
+                        setStatusText('Cannot reposition here. Keep some spacing between defenders.');
+                    }
+                };
+
+                sprite.on('pointerdown', (event) => {
+                    if (waveInProgress) {
+                        return;
+                    }
+
+                    const pointerPosition = event.getLocalPosition(world);
+                    dragStartX = defender.sprite.x;
+                    dragStartY = defender.sprite.y;
+                    dragOffsetX = pointerPosition.x - defender.sprite.x;
+                    dragOffsetY = pointerPosition.y - defender.sprite.y;
+                    isDraggingDefender = true;
+                    sprite.alpha = 0.86;
                 });
+
+                sprite.on('pointermove', (event) => {
+                    if (!isDraggingDefender || waveInProgress) {
+                        return;
+                    }
+
+                    const pointerPosition = event.getLocalPosition(world);
+                    const clampedPosition = getClampedPosition(pointerPosition.x - dragOffsetX, pointerPosition.y - dragOffsetY);
+                    defender.sprite.x = clampedPosition.x;
+                    defender.sprite.y = clampedPosition.y;
+                    syncDefenderVisuals();
+                });
+
+                sprite.on('pointerup', endDefenderDrag);
+                sprite.on('pointerupoutside', endDefenderDrag);
+
+                defenders.push(defender);
+            };
+
+            const getClampedPlacement = (x: number, y: number): {x: number; y: number} => {
+                const clampedX = Math.max(60, Math.min(app.renderer.width - 70, x));
+                const clampedY = Math.max(DEFENDER_SPRITE_HEIGHT + 20, Math.min(app.renderer.height - 20, y));
+                const clampedSafeX = Math.max(DEFENDER_HALF_WIDTH + 10, Math.min(app.renderer.width - DEFENDER_HALF_WIDTH - 10, clampedX));
+                return {x: clampedSafeX, y: clampedY};
+            };
+
+            const canPlaceAt = (x: number, y: number): boolean => {
+                return !defenders.some((defender) => {
+                    const dx = defender.sprite.x - x;
+                    const dy = defender.sprite.y - y;
+                    return (dx * dx + dy * dy) < (216 * 216);
+                });
+            };
+
+            const clearPlacementPreview = (): void => {
+                if (placementPreview != null) {
+                    placementPreview.destroy();
+                    placementPreview = null;
+                    placementPreviewType = null;
+                }
+            };
+
+            const updatePlacementPreview = (card: Unit, x: number, y: number): void => {
+                if (waveInProgress) {
+                    clearPlacementPreview();
+                    return;
+                }
+
+                const clampedPosition = getClampedPlacement(x, y);
+                const placeable = canPlaceAt(clampedPosition.x, clampedPosition.y);
+
+                if (placementPreview == null || placementPreviewType !== card.type) {
+                    placementPreview?.destroy();
+                    placementPreview = new Graphics();
+                    placementPreviewType = card.type;
+                    defenderLayer.addChild(placementPreview);
+                }
+
+                const fillAlpha = placeable ? 0.1 : 0.07;
+                const strokeAlpha = placeable ? 0.38 : 0.72;
+
+                placementPreview.clear();
+                placementPreview.x = clampedPosition.x;
+                placementPreview.y = clampedPosition.y;
+
+                if (card.type === 'melee') {
+                    const color = placeable ? 0x4ade80 : 0xf87171;
+                    placementPreview.circle(0, 0, MELEE_RANGE);
+                    placementPreview.fill({color, alpha: fillAlpha});
+                    placementPreview.stroke({width: 2, color, alpha: strokeAlpha});
+                } else if (card.type === 'ranged') {
+                    const color = placeable ? 0x60a5fa : 0xf87171;
+                    placementPreview.moveTo(0, 0);
+                    placementPreview.arc(0, 0, RANGED_CONE_RANGE, -RANGED_CONE_HALF_ANGLE, RANGED_CONE_HALF_ANGLE);
+                    placementPreview.closePath();
+                    placementPreview.fill({color, alpha: placeable ? 0.09 : 0.06});
+                    placementPreview.stroke({width: 2, color, alpha: placeable ? 0.34 : 0.7});
+                } else {
+                    const color = placeable ? 0xc084fc : 0xf87171;
+                    placementPreview.circle(0, 0, MAGIC_RANGE);
+                    placementPreview.fill({color, alpha: placeable ? 0.08 : 0.06});
+                    placementPreview.stroke({width: 2, color, alpha: placeable ? 0.33 : 0.7});
+                }
+
+                placementPreview.circle(0, 0, 12);
+                placementPreview.fill({color: placeable ? 0xe2e8f0 : 0xfca5a5, alpha: 0.9});
             };
 
             const findClosestDefender = (x: number, y: number, predicate?: (defender: Defender) => boolean): Defender | null => {
@@ -532,7 +836,7 @@ export const TowerDefenseBoard = (): ReactElement => {
 
                         if (targets.length > 0) {
                             for (const enemy of targets) {
-                                damageEnemy(enemy, defender.card.attack * 1.18);
+                                damageEnemy(enemy, defender.card.attack * 1.18, defender);
                             }
                             createMeleeEffect(defender.sprite.x, defender.sprite.y, slashRadius);
                             defender.cooldown = 36;
@@ -564,7 +868,7 @@ export const TowerDefenseBoard = (): ReactElement => {
 
                         const target = inCone[0];
                         if (target != null) {
-                            damageEnemy(target, defender.card.attack * 1.35);
+                            damageEnemy(target, defender.card.attack * 1.35, defender);
                             createArrowEffect(defender.sprite.x + 8, defender.sprite.y - 3, target.sprite.x, target.sprite.y);
                             defender.cooldown = 29;
                         }
@@ -606,7 +910,7 @@ export const TowerDefenseBoard = (): ReactElement => {
                             const target = chainTargets[index];
                             jumpPoints.push({x: target.sprite.x, y: target.sprite.y});
                             const falloff = Math.max(0.55, 1 - index * 0.23);
-                            damageEnemy(target, defender.card.attack * 1.22 * falloff);
+                            damageEnemy(target, defender.card.attack * 1.22 * falloff, defender);
                             createMagicImpactRadiusEffect(target.sprite.x, target.sprite.y, 56);
                         }
 
@@ -676,6 +980,10 @@ export const TowerDefenseBoard = (): ReactElement => {
                     }
 
                     if (enemy.hp <= 0) {
+                        if (enemy.lastHitByDefenderId != null) {
+                            const killer = defenders.find((defender) => defender.id === enemy.lastHitByDefenderId);
+                            playVoiceLine(killer?.card.killLineUrl, KILL_LINE_CHANCE);
+                        }
                         enemy.sprite.destroy();
                         enemy.healthBarBg.destroy();
                         enemy.healthBar.destroy();
@@ -695,16 +1003,21 @@ export const TowerDefenseBoard = (): ReactElement => {
 
                 for (let index = defenders.length - 1; index >= 0; index -= 1) {
                     if (defenders[index].hp <= 0) {
+                        playVoiceLine(defenders[index].card.deathLineUrl);
                         removeDefender(index);
                     }
                 }
 
                 if (waveInProgress && enemiesSpawned >= totalEnemiesInWave && enemies.length === 0) {
                     waveInProgress = false;
+                    clearPlacementPreview();
                     setIsWaveRunning(false);
                     setGold((current) => current + 8);
-                    setHand(drawHand(6));
-                    setStatusText('Wave cleared. Reinforcements arrived; draw new cards and deploy.');
+                    const nextHand = stage.drawUnitsFromReserve(6);
+                    setHand(nextHand);
+                    setStatusText(nextHand.length > 0
+                        ? 'Wave cleared. Reinforcements arrived; draw new cards and deploy.'
+                        : 'Wave cleared. Waiting for reserve cards to finish loading.');
                 }
             };
 
@@ -717,6 +1030,11 @@ export const TowerDefenseBoard = (): ReactElement => {
                 enemiesSpawned = 0;
                 setIsWaveRunning(true);
                 setStatusText('Round started. Hand retracted while defenders engage.');
+
+                if (defenders.length > 0) {
+                    const randomDefender = defenders[Math.floor(Math.random() * defenders.length)];
+                    playVoiceLine(randomDefender?.card.waveLineUrl);
+                }
 
                 spawnEnemy();
                 enemiesSpawned += 1;
@@ -737,26 +1055,19 @@ export const TowerDefenseBoard = (): ReactElement => {
                 return true;
             };
 
-            const placeDefender = (card: Card, x: number, y: number): boolean => {
+            const placeDefender = (card: Unit, x: number, y: number): boolean => {
                 if (waveInProgress) {
                     return false;
                 }
 
-                const clampedX = Math.max(60, Math.min(app.renderer.width - 70, x));
-                const clampedY = Math.max(DEFENDER_HALF_HEIGHT + 20, Math.min(app.renderer.height - DEFENDER_HALF_HEIGHT - 20, y));
-                const clampedSafeX = Math.max(DEFENDER_HALF_WIDTH + 10, Math.min(app.renderer.width - DEFENDER_HALF_WIDTH - 10, clampedX));
-
-                const tooClose = defenders.some((defender) => {
-                    const dx = defender.sprite.x - clampedSafeX;
-                    const dy = defender.sprite.y - clampedY;
-                    return (dx * dx + dy * dy) < (216 * 216);
-                });
-
-                if (tooClose) {
+                const clampedPosition = getClampedPlacement(x, y);
+                const placeable = canPlaceAt(clampedPosition.x, clampedPosition.y);
+                if (!placeable) {
                     return false;
                 }
 
-                spawnDefender(card, clampedSafeX, clampedY);
+                spawnDefender(card, clampedPosition.x, clampedPosition.y);
+                clearPlacementPreview();
                 return true;
             };
 
@@ -765,7 +1076,7 @@ export const TowerDefenseBoard = (): ReactElement => {
                 grass.height = app.renderer.height;
             };
 
-            boardApiRef.current = {placeDefender, startWave};
+            boardApiRef.current = {placeDefender, startWave, updatePlacementPreview, clearPlacementPreview};
             app.renderer.on('resize', resizeScene);
             app.ticker.add(updateBattle);
         };
@@ -780,15 +1091,63 @@ export const TowerDefenseBoard = (): ReactElement => {
                 window.clearInterval(spawnIntervalId);
             }
 
+            clearDragImage();
+
+            if (activeVoiceAudioRef.current != null) {
+                activeVoiceAudioRef.current.pause();
+                activeVoiceAudioRef.current = null;
+            }
+
             app.destroy(true, {children: true});
         };
     }, []);
 
     const handleStartWave = (): void => {
+        if (isOpeningPack || isGeneratingPack) {
+            setStatusText('Finish opening the current pack before starting a wave.');
+            return;
+        }
+
         const success = boardApiRef.current?.startWave() ?? false;
         if (!success) {
             setStatusText('A round is already running.');
         }
+    };
+
+    const handleOpenPack = async (): Promise<void> => {
+        if (interactionLocked) {
+            return;
+        }
+
+        setIsGeneratingPack(true);
+        setStatusText('Generating a fresh foil pack...');
+
+        try {
+            const generatedTemplates = await stage.generatePackTemplates(PACK_SIZE);
+            if (generatedTemplates.length === 0) {
+                setStatusText('Pack generation failed. Try opening another pack.');
+                return;
+            }
+
+            setPackTemplates(generatedTemplates);
+            setIsOpeningPack(true);
+            setStatusText('Tear the sleeve to reveal your new templates.');
+        } catch (error) {
+            console.error('Failed to open pack', error);
+            setStatusText('Pack generation hit an error. Please try again.');
+        } finally {
+            setIsGeneratingPack(false);
+        }
+    };
+
+    const handlePackComplete = (): void => {
+        stage.addTemplatesToReserve(packTemplates);
+        const insertedCount = packTemplates.length;
+        setPackTemplates([]);
+        setIsOpeningPack(false);
+        setStatusText(insertedCount > 0
+            ? `Added ${insertedCount} new template cards to reserve.`
+            : 'Pack closed.');
     };
 
     const clearDragImage = (): void => {
@@ -798,13 +1157,14 @@ export const TowerDefenseBoard = (): ReactElement => {
         }
     };
 
-    const handleCardDragStart = (event: React.DragEvent<HTMLDivElement>, card: Card): void => {
+    const handleCardDragStart = (event: React.DragEvent<HTMLDivElement>, card: Unit): void => {
         event.dataTransfer.setData('application/x-elf-card', card.id);
+        setDraggingCardId(card.id);
 
         clearDragImage();
 
         const dragImage = document.createElement('img');
-        dragImage.src = card.portrait;
+        dragImage.src = card.imageUrl;
         dragImage.alt = card.name;
         dragImage.width = DEFENDER_SPRITE_WIDTH;
         dragImage.height = DEFENDER_SPRITE_HEIGHT;
@@ -817,15 +1177,17 @@ export const TowerDefenseBoard = (): ReactElement => {
 
         document.body.appendChild(dragImage);
         dragImageRef.current = dragImage;
-        event.dataTransfer.setDragImage(dragImage, DEFENDER_SPRITE_WIDTH / 2, DEFENDER_SPRITE_HEIGHT / 2);
+        event.dataTransfer.setDragImage(dragImage, DEFENDER_SPRITE_WIDTH / 2, DEFENDER_SPRITE_HEIGHT);
     };
 
     const handleDrop = (event: React.DragEvent<HTMLDivElement>): void => {
         event.preventDefault();
         clearDragImage();
+        setDraggingCardId(null);
+        boardApiRef.current?.clearPlacementPreview();
 
-        if (isWaveRunning) {
-            setStatusText('Cannot deploy while a round is active.');
+        if (interactionLocked) {
+            setStatusText('Cannot deploy while gameplay is paused.');
             return;
         }
 
@@ -859,13 +1221,39 @@ export const TowerDefenseBoard = (): ReactElement => {
         }
 
         setGold((current) => current - droppedCard.cost);
-        setHand((current) => current.filter((card) => card.id !== droppedCard.id));
+        setHand((current) => {
+            const remaining = current.filter((card) => card.id !== droppedCard.id);
+            const refill = stage.drawUnitsFromReserve(6 - remaining.length);
+            return [...remaining, ...refill];
+        });
         setStatusText(`Placed ${droppedCard.name}.`);
+        playVoiceLine(droppedCard.deployLineUrl);
     };
 
     return <div
         style={{position: 'relative', width: '100%', height: '100%'}}
-        onDragOver={(event) => event.preventDefault()}
+        onDragOver={(event) => {
+            event.preventDefault();
+
+            if (interactionLocked || draggingCardId == null) {
+                boardApiRef.current?.clearPlacementPreview();
+                return;
+            }
+
+            const draggedCard = hand.find((card) => card.id === draggingCardId);
+            const stageBounds = stageRef.current?.getBoundingClientRect();
+            if (draggedCard == null || stageBounds == null) {
+                boardApiRef.current?.clearPlacementPreview();
+                return;
+            }
+
+            const x = event.clientX - stageBounds.left;
+            const y = event.clientY - stageBounds.top;
+            boardApiRef.current?.updatePlacementPreview(draggedCard, x, y);
+        }}
+        onDragLeave={() => {
+            boardApiRef.current?.clearPlacementPreview();
+        }}
         onDrop={handleDrop}
     >
         <div ref={stageRef} style={{width: '100%', height: '100%'}}/>
@@ -908,7 +1296,7 @@ export const TowerDefenseBoard = (): ReactElement => {
         <button
             type={'button'}
             onClick={handleStartWave}
-            disabled={isWaveRunning}
+            disabled={interactionLocked}
             style={{
                 position: 'absolute',
                 top: 16,
@@ -919,72 +1307,210 @@ export const TowerDefenseBoard = (): ReactElement => {
                 fontSize: 15,
                 fontWeight: 700,
                 padding: '10px 16px',
-                background: isWaveRunning ? '#4b5563' : '#0f766e',
-                cursor: isWaveRunning ? 'not-allowed' : 'pointer',
+                background: interactionLocked ? '#4b5563' : '#0f766e',
+                cursor: interactionLocked ? 'not-allowed' : 'pointer',
                 boxShadow: '0 4px 16px rgba(15, 23, 42, 0.35)',
             }}
         >
             {isWaveRunning ? 'Wave Running...' : 'Start Wave'}
         </button>
 
+        <button
+            type={'button'}
+            onClick={() => {
+                void handleOpenPack();
+            }}
+            disabled={interactionLocked}
+            style={{
+                position: 'absolute',
+                top: 16,
+                right: 136,
+                border: 'none',
+                borderRadius: 10,
+                color: '#ffffff',
+                fontSize: 14,
+                fontWeight: 700,
+                padding: '10px 14px',
+                background: interactionLocked ? '#374151' : '#7c3aed',
+                cursor: interactionLocked ? 'not-allowed' : 'pointer',
+                boxShadow: '0 4px 16px rgba(15, 23, 42, 0.35)',
+            }}
+        >
+            {isGeneratingPack ? 'Opening...' : 'Open Pack'}
+        </button>
+
         <div style={handStyle}>
             {hand.map((card) => {
                 const affordable = gold >= card.cost;
+                const theme = CARD_THEME[card.type];
                 return <div
                     key={card.id}
-                    draggable={!isWaveRunning && affordable}
+                    draggable={!interactionLocked && affordable}
                     onDragStart={(event) => handleCardDragStart(event, card)}
-                    onDragEnd={clearDragImage}
+                    onDragEnd={() => {
+                        clearDragImage();
+                        setDraggingCardId(null);
+                        boardApiRef.current?.clearPlacementPreview();
+                    }}
                     style={{
-                        width: 146,
-                        borderRadius: 12,
-                        border: `2px solid ${affordable ? 'rgba(167, 243, 208, 0.65)' : 'rgba(248, 113, 113, 0.75)'}`,
-                        background: 'rgba(15, 23, 42, 0.76)',
-                        boxShadow: '0 6px 18px rgba(2, 6, 23, 0.42)',
+                        width: 172,
+                        minHeight: 286,
+                        borderRadius: 14,
+                        border: `2px solid ${affordable ? theme.accent : 'rgba(248, 113, 113, 0.75)'}`,
+                        background: `
+                            linear-gradient(160deg, rgba(17, 24, 39, 0.9), rgba(15, 23, 42, 0.82)),
+                            repeating-linear-gradient(
+                                135deg,
+                                ${theme.accentSoft} 0px,
+                                ${theme.accentSoft} 2px,
+                                rgba(15, 23, 42, 0.1) 2px,
+                                rgba(15, 23, 42, 0.1) 8px
+                            )
+                        `,
+                        boxShadow: `0 8px 20px rgba(2, 6, 23, 0.45), 0 0 0 1px ${theme.accentSoft} inset`,
                         color: '#f8fafc',
-                        padding: 8,
+                        padding: '10px 42px 10px 10px',
                         fontFamily: 'Inter, Arial, sans-serif',
                         cursor: affordable ? 'grab' : 'not-allowed',
                         opacity: affordable ? 1 : 0.7,
+                        position: 'relative',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        justifyContent: 'flex-start',
                     }}
                 >
                     <div style={{
+                        position: 'absolute',
+                        top: 8,
+                        left: 8,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 3,
+                        background: 'rgba(15, 23, 42, 0.88)',
+                        border: `1px solid ${theme.accent}`,
+                        borderRadius: 999,
+                        padding: '3px 7px',
+                        color: '#fef9c3',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        letterSpacing: 0.2,
+                    }}>
+                        <PaidRoundedIcon style={{fontSize: 13}}/>
+                        {card.cost}
+                    </div>
+
+                    <div style={{
+                        position: 'absolute',
+                        top: 36,
+                        right: 8,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 6,
+                    }}>
+                        <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: 4,
+                            minWidth: 26,
+                            color: '#fde68a',
+                            fontSize: 12,
+                            fontWeight: 700,
+                        }}>
+                            {getAttackIcon(card.type)}
+                            <span>{card.attack}</span>
+                        </div>
+                        <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: 4,
+                            minWidth: 26,
+                            color: '#fecaca',
+                            fontSize: 12,
+                            fontWeight: 700,
+                        }}>
+                            <FavoriteRoundedIcon style={{fontSize: 14}}/>
+                            <span>{card.health}</span>
+                        </div>
+                        {card.shield > 0 ? <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: 4,
+                            minWidth: 26,
+                            color: '#bae6fd',
+                            fontSize: 12,
+                            fontWeight: 700,
+                        }}>
+                            <ShieldRoundedIcon style={{fontSize: 14}}/>
+                            <span>{card.shield}</span>
+                        </div> : null}
+                    </div>
+
+                    <div style={{
                         width: '100%',
-                        height: 76,
+                        height: 108,
                         borderRadius: 8,
-                        backgroundImage: `url(${card.portrait})`,
-                        backgroundPosition: 'center',
+                        backgroundImage: `url(${card.portraitUrl})`,
+                        backgroundPosition: 'top center',
                         backgroundSize: 'cover',
-                        border: '1px solid rgba(148, 163, 184, 0.5)',
+                        border: `1px solid ${theme.accent}`,
                         marginBottom: 8,
                     }}/>
-                    <div style={{fontSize: 13, fontWeight: 700, marginBottom: 6}}>{card.name}</div>
-                    <div style={{fontSize: 12, opacity: 0.92, lineHeight: 1.32}}>
-                        <div>Type: {card.type}</div>
-                        <div>Body/Hair: {card.bodyType} / {card.hairType}</div>
-                        <div>Cost: {card.cost}</div>
-                        <div>ATK: {card.attack} • HP: {card.health}</div>
-                        {card.type === 'melee' ? <>
-                            <div style={{marginTop: 4}}>Shield: {card.shield} (recharging)</div>
-                            <div style={{
-                                marginTop: 3,
-                                width: '100%',
-                                height: 5,
-                                borderRadius: 999,
-                                background: 'rgba(15, 23, 42, 0.95)',
-                                border: '1px solid rgba(103, 232, 249, 0.5)',
-                            }}>
-                                <div style={{
-                                    width: '100%',
-                                    height: '100%',
-                                    borderRadius: 999,
-                                    background: 'linear-gradient(90deg, rgba(34,211,238,0.9), rgba(125,211,252,0.95))',
-                                }}/>
-                            </div>
-                        </> : null}
+                    <div style={{
+                        fontSize: 15,
+                        fontWeight: 700,
+                        lineHeight: 1.1,
+                        marginBottom: 6,
+                        fontFamily: 'Georgia, Times New Roman, serif',
+                        textShadow: '0 1px 8px rgba(15, 23, 42, 0.75)',
+                    }}>
+                        {card.name}
+                    </div>
+
+                    <div style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        marginBottom: 8,
+                        fontSize: 11,
+                        fontWeight: 600,
+                        color: '#e2e8f0',
+                        textTransform: 'uppercase',
+                        letterSpacing: 0.6,
+                    }}>
+                        <span style={{
+                            borderRadius: 999,
+                            border: `1px solid ${theme.accent}`,
+                            color: theme.accent,
+                            padding: '2px 6px',
+                            background: 'rgba(2, 6, 23, 0.5)',
+                        }}>
+                            {card.type}
+                        </span>
+                        <span>{theme.attackLabel}</span>
+                    </div>
+
+                    <div style={{
+                        marginTop: 'auto',
+                        borderTop: `1px solid ${theme.accentSoft}`,
+                        paddingTop: 8,
+                        minHeight: 38,
+                        fontSize: 11,
+                        color: '#cbd5e1',
+                        lineHeight: 1.35,
+                        fontStyle: 'italic',
+                    }}>
+                        {card.flavor || theme.flavor}
                     </div>
                 </div>;
             })}
         </div>
+
+        {isOpeningPack ? <UnitPackOpening
+            templates={packTemplates}
+            onComplete={handlePackComplete}
+        /> : null}
     </div>;
 };
