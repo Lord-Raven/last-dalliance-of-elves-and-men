@@ -469,7 +469,7 @@ export async function loadReserveUnitTemplate(data: any, stage: Stage): Promise<
     }
 
     // Build a core description based on types:
-    const coreDescription = `This character has a naked ${bodyDescription[bodyType]} with ${hairDescription[hairType]}, wielding ${unitDescription[unitType]}.`;
+    const coreDescription = `This elf has a naked ${bodyDescription[bodyType]} with ${hairDescription[hairType]}, green eyes, and pointy ears; they're wielding ${unitDescription[unitType]}.`;
 
     const [imagePromptResponse, quotesResponse] = await Promise.all([
         // Generate image prompt based on description. Use the description from above and prompt a bullet-pointed breakdown of key features for a concise image prompt.
@@ -480,13 +480,13 @@ export async function loadReserveUnitTemplate(data: any, stage: Stage): Promise<
                 `Your task is to analyze the provided character description and extract key visual elements that can be used to create a concise and effective image prompt for an AI image generator. ` +
                 `Focus on identifying specific attributes such as clothing style, color scheme, accessories, facial features, and any unique characteristics mentioned in the description. ` +
                 `The output should be a bullet-pointed list of these key visual elements that can guide the creation of the character's portrait. ` +
-                `Focus on listing details that are a departure from the default description: ${coreDescription}.\n\n` +
+                `Focus on listing details that are a departure from the default description: ${coreDescription}. Typically, skin tone, hair color, eye color, and clothing.\n\n` +
                 `Character Physical Description:\n${parsedData['description'] || ''}\n\n` +
                 `Example Output:\n` +
-                `- dark hair\n` +
-                `- Blue eyes\n` +
-                `- Simple, utilitarian outfit made from durable materials\n` +
-                `- Confident and determined expression\n` +
+                `- Tanned skin\n` +
+                `- Dark hair\n` +
+                `- Golden eyes\n` +
+                `- Flowing dark leather armor\n` +
                 `- Combat boots\n` +
                 `#END#`,
             stop: ['#END'],
@@ -513,7 +513,16 @@ export async function loadReserveUnitTemplate(data: any, stage: Stage): Promise<
     ]);
     console.log('Generated image prompt breakdown:');
     console.log(imagePromptResponse);
-    const imagePrompt = (imagePromptResponse?.result || '').split('\n').map(line => line.replace(/^-+\s*/, '-').trim()).filter(line => line.length > 0).join('\n') || parsedData['description'] || '';
+
+    const imagePrompt = (imagePromptResponse?.result || '')
+        .split('\n')
+        .map(line => {
+            const match = line.match(/^\s*[*-]+\s*(.+?)\s*$/);
+            return match ? `- ${match[1]}` : '';
+        })
+        .filter(line => line.length > 0)
+        .join('\n')
+        .trim() || parsedData['description'] || '';
 
     console.log('Generated situational quote lines:');
     console.log(quotesResponse);

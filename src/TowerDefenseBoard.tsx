@@ -83,6 +83,9 @@ const ENEMY_MOVE_DURATION_RATIO = 0.78;
 const HAND_FAN_ROTATION_DEGREES = 4.2;
 const HAND_FAN_VERTICAL_OFFSET = 5;
 const DRAG_CARD_RETURN_MS = 260;
+const DRAG_CURSOR_OFFSET_X = 30;
+const DRAG_CURSOR_OFFSET_Y = -24;
+const TRANSPARENT_DRAG_PIXEL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
 
 const CARD_THEME: Record<Unit['type'], {
     accent: string;
@@ -1394,8 +1397,8 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
         }
 
         return {
-            x: clientX - boardBounds.left + DEFENDER_SPRITE_WIDTH * 0.6,
-            y: clientY - boardBounds.top - DEFENDER_SPRITE_HEIGHT * 0.56,
+            x: clientX - boardBounds.left + DRAG_CURSOR_OFFSET_X,
+            y: clientY - boardBounds.top + DRAG_CURSOR_OFFSET_Y,
         };
     };
 
@@ -1486,20 +1489,20 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
         clearDragImage();
 
         const dragImage = document.createElement('img');
-        dragImage.src = card.imageUrl;
+        dragImage.src = TRANSPARENT_DRAG_PIXEL;
         dragImage.alt = card.name;
-        dragImage.width = DEFENDER_SPRITE_WIDTH;
-        dragImage.height = DEFENDER_SPRITE_HEIGHT;
+        dragImage.width = 1;
+        dragImage.height = 1;
         dragImage.style.position = 'fixed';
         dragImage.style.top = '-10000px';
         dragImage.style.left = '-10000px';
-        dragImage.style.width = `${DEFENDER_SPRITE_WIDTH}px`;
-        dragImage.style.height = `${DEFENDER_SPRITE_HEIGHT}px`;
+        dragImage.style.width = '1px';
+        dragImage.style.height = '1px';
         dragImage.style.pointerEvents = 'none';
 
         document.body.appendChild(dragImage);
         dragImageRef.current = dragImage;
-        event.dataTransfer.setDragImage(dragImage, DEFENDER_SPRITE_WIDTH / 2, DEFENDER_SPRITE_HEIGHT);
+        event.dataTransfer.setDragImage(dragImage, 0, 0);
     };
 
     const handleDrop = (event: React.DragEvent<HTMLDivElement>): void => {
@@ -1559,6 +1562,22 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
     };
 
     const renderCardInner = (card: Unit, theme: typeof CARD_THEME[Unit['type']]): ReactElement => {
+        const statCapsuleBase: CSSProperties = {
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 4,
+            minWidth: 40,
+            borderRadius: 999,
+            padding: '3px 7px',
+            background: 'rgba(15, 23, 42, 0.92)',
+            border: `1px solid ${theme.accent}`,
+            boxShadow: '0 2px 8px rgba(2, 6, 23, 0.4)',
+            fontSize: 12,
+            fontWeight: 700,
+            letterSpacing: 0.2,
+        };
+
         return <>
             <div style={{
                 position: 'absolute',
@@ -1579,10 +1598,11 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: 3,
-                background: 'rgba(15, 23, 42, 0.88)',
+                background: 'rgba(15, 23, 42, 0.92)',
                 border: `1px solid ${theme.accent}`,
                 borderRadius: 999,
                 padding: '3px 7px',
+                boxShadow: '0 2px 8px rgba(2, 6, 23, 0.4)',
                 color: '#fef9c3',
                 fontSize: 12,
                 fontWeight: 700,
@@ -1599,44 +1619,26 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                 right: 10,
                 display: 'flex',
                 flexDirection: 'column',
-                gap: 6,
+                gap: 5,
                 zIndex: 2,
             }}>
                 <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 4,
-                    minWidth: 26,
+                    ...statCapsuleBase,
                     color: '#fde68a',
-                    fontSize: 12,
-                    fontWeight: 700,
                 }}>
                     {getAttackIcon(card.type)}
                     <span>{card.attack}</span>
                 </div>
                 <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 4,
-                    minWidth: 26,
+                    ...statCapsuleBase,
                     color: '#fecaca',
-                    fontSize: 12,
-                    fontWeight: 700,
                 }}>
                     <FavoriteRoundedIcon style={{fontSize: 14}}/>
                     <span>{card.health}</span>
                 </div>
                 {card.shield > 0 ? <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 4,
-                    minWidth: 26,
+                    ...statCapsuleBase,
                     color: '#bae6fd',
-                    fontSize: 12,
-                    fontWeight: 700,
                 }}>
                     <ShieldRoundedIcon style={{fontSize: 14}}/>
                     <span>{card.shield}</span>
@@ -1886,7 +1888,7 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                     animation: interactionLocked || isDraggingCard
                         ? 'none'
                         : `td-card-idle ${5.2 + (index % 3) * 0.9}s ease-in-out ${-index * 0.7}s infinite alternate`,
-                    transition: 'transform 220ms ease, box-shadow 220ms ease, opacity 220ms ease',
+                    transition: 'transform 220ms ease, box-shadow 220ms ease',
                     overflow: 'hidden',
                     ['--card-base-transform']: baseTransform,
                 };
