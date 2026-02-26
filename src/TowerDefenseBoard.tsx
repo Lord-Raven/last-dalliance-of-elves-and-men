@@ -246,9 +246,11 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
             });
             world.addChild(grass);
 
+            const defenderGroundLayer = new Container();
             const defenderLayer = new Container();
             const enemyLayer = new Container();
             const effectLayer = new Container();
+            world.addChild(defenderGroundLayer);
             world.addChild(defenderLayer);
             world.addChild(enemyLayer);
             world.addChild(effectLayer);
@@ -521,12 +523,12 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                     rangeCircle.stroke({width: 2, color: 0x4ade80, alpha: 0.35});
                     rangeCircle.x = x;
                     rangeCircle.y = y;
-                    defenderLayer.addChild(rangeCircle);
+                    defenderGroundLayer.addChild(rangeCircle);
 
                     shieldCircle = new Graphics();
                     shieldCircle.x = x;
                     shieldCircle.y = y;
-                    defenderLayer.addChild(shieldCircle);
+                    defenderGroundLayer.addChild(shieldCircle);
 
                     shieldBarBg = new Graphics();
                     shieldBar = new Graphics();
@@ -541,7 +543,7 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                     rangeCone.stroke({width: 2, color: 0x60a5fa, alpha: 0.34});
                     rangeCone.x = x;
                     rangeCone.y = y;
-                    defenderLayer.addChild(rangeCone);
+                    defenderGroundLayer.addChild(rangeCone);
                 } else {
                     rangeCircle = new Graphics();
                     rangeCircle.circle(0, 0, MAGIC_RANGE);
@@ -549,7 +551,7 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                     rangeCircle.stroke({width: 2, color: 0xc084fc, alpha: 0.32});
                     rangeCircle.x = x;
                     rangeCircle.y = y;
-                    defenderLayer.addChild(rangeCircle);
+                    defenderGroundLayer.addChild(rangeCircle);
                 }
 
                 defenderLayer.addChild(sprite);
@@ -700,7 +702,7 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                     placementPreview?.destroy();
                     placementPreview = new Graphics();
                     placementPreviewType = card.type;
-                    defenderLayer.addChild(placementPreview);
+                    defenderGroundLayer.addChild(placementPreview);
                 }
 
                 const fillAlpha = placeable ? 0.1 : 0.07;
@@ -1353,7 +1355,7 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                     }}
                     style={{
                         width: 172,
-                        minHeight: 286,
+                        minHeight: 340,
                         borderRadius: 14,
                         border: `2px solid ${affordable ? theme.accent : 'rgba(248, 113, 113, 0.75)'}`,
                         background: `
@@ -1376,8 +1378,21 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                         display: 'flex',
                         flexDirection: 'column',
                         justifyContent: 'flex-start',
+                        overflow: 'hidden',
                     }}
                 >
+                    <div style={{
+                        position: 'absolute',
+                        inset: 0,
+                        backgroundImage: `url(${card.imageUrl})`,
+                        backgroundPosition: 'center 30%',
+                        backgroundSize: 'cover',
+                        backgroundRepeat: 'no-repeat',
+                        opacity: 0.16,
+                        filter: 'saturate(0.95)',
+                        pointerEvents: 'none',
+                    }}/>
+
                     <div style={{
                         position: 'absolute',
                         top: 8,
@@ -1393,6 +1408,7 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                         fontSize: 12,
                         fontWeight: 700,
                         letterSpacing: 0.2,
+                        zIndex: 1,
                     }}>
                         <PaidRoundedIcon style={{fontSize: 13}}/>
                         {card.cost}
@@ -1405,6 +1421,7 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                         display: 'flex',
                         flexDirection: 'column',
                         gap: 6,
+                        zIndex: 1,
                     }}>
                         <div style={{
                             display: 'flex',
@@ -1449,13 +1466,15 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
 
                     <div style={{
                         width: '100%',
-                        height: 108,
+                        height: 162,
                         borderRadius: 8,
                         backgroundImage: `url(${card.portraitUrl})`,
                         backgroundPosition: 'top center',
                         backgroundSize: 'cover',
                         border: `1px solid ${theme.accent}`,
                         marginBottom: 8,
+                        position: 'relative',
+                        zIndex: 1,
                     }}/>
                     <div style={{
                         fontSize: 15,
@@ -1464,6 +1483,8 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                         marginBottom: 6,
                         fontFamily: 'Georgia, Times New Roman, serif',
                         textShadow: '0 1px 8px rgba(15, 23, 42, 0.75)',
+                        position: 'relative',
+                        zIndex: 1,
                     }}>
                         {card.name}
                     </div>
@@ -1478,6 +1499,8 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                         color: '#e2e8f0',
                         textTransform: 'uppercase',
                         letterSpacing: 0.6,
+                        position: 'relative',
+                        zIndex: 1,
                     }}>
                         <span style={{
                             borderRadius: 999,
@@ -1500,6 +1523,8 @@ export const TowerDefenseBoard = ({stage}: {stage: Stage}): ReactElement => {
                         color: '#cbd5e1',
                         lineHeight: 1.35,
                         fontStyle: 'italic',
+                        position: 'relative',
+                        zIndex: 1,
                     }}>
                         {card.flavor || theme.flavor}
                     </div>
