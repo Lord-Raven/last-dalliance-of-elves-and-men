@@ -77,7 +77,7 @@ export const UnitCardFace = ({card, theme}: {card: Unit; theme: CardTheme}): Rea
             pointerEvents: 'none',
         }}/>
 
-        <div style={{
+        <div className={'unit-stat-capsule unit-cost-capsule'} style={{
             position: 'absolute',
             top: 12,
             left: 10,
@@ -108,21 +108,21 @@ export const UnitCardFace = ({card, theme}: {card: Unit; theme: CardTheme}): Rea
             gap: 5,
             zIndex: 2,
         }}>
-            <div style={{
+            <div className={'unit-stat-capsule'} style={{
                 ...statCapsuleBase,
                 color: '#fde68a',
             }}>
                 {getAttackIcon(card.type)}
                 <span>{card.attack}</span>
             </div>
-            <div style={{
+            <div className={'unit-stat-capsule'} style={{
                 ...statCapsuleBase,
                 color: '#fecaca',
             }}>
                 <FavoriteRoundedIcon style={{fontSize: 14}}/>
                 <span>{card.health}</span>
             </div>
-            {card.shield > 0 ? <div style={{
+            {card.shield > 0 ? <div className={'unit-stat-capsule'} style={{
                 ...statCapsuleBase,
                 color: '#bae6fd',
             }}>

@@ -156,7 +156,7 @@ const baseImages: PortraitMatrix = {
 };
 
 export const DEMO_FULL_PATHS: ReadonlyArray<string> = [
-    /*'Happy_Spanker/gilleandra-therys-f8b0da874905',
+    'Happy_Spanker/gilleandra-therys-f8b0da874905',
     'JakeH/merritrix-f72f6a2bab0a',
     'Happy_Spanker/aelara-veylin-3286274bad6b',
     'Happy_Spanker/elfie-elvenson-75bdd03bad56',
@@ -164,7 +164,7 @@ export const DEMO_FULL_PATHS: ReadonlyArray<string> = [
     'Happy_Spanker/eliara-2eaaa1e0cdd4',
     'JakeH/kalariel-ebonheart-a3388e951164',
     'Happy_Spanker/ena-riallath-69d68f3dcafb',
-    'ErlkingC/ishe-dark-elf-assassin-077f6ba2962a',
+    /*'ErlkingC/ishe-dark-elf-assassin-077f6ba2962a',
     'Boy_Next_Door/nyrissa-the-runaway-slave-b376f6d5862c',
     'miyo_rin/sylvanetta-disaster-princess-15906b408451',
     'Kapot/Tittyana',
@@ -181,7 +181,7 @@ export const DEMO_FULL_PATHS: ReadonlyArray<string> = [
     'miyo_rin/nezraya-matron-mother-of-house-morvyth-19aea27c8346',
     'statuotw/arryn-the-knight-5843a0ee',
     'LilithVirty/lyssandra-the-ironwood-massacre-f191e66c0059',
-    'AnonBrier/lyndis-the-vengeful-rogue-mistwater-chronicles-16e26ef00c66',*/
+    'AnonBrier/lyndis-the-vengeful-rogue-mistwater-chronicles-16e26ef00c66',
     '7leaf/claire-your-elf-mother-c304f9906eb7',
     'Sexiam/seraphis-darkspire-captured-elf-princess-spoils-of-war-3bbfa54a8921',
     'statuotw/shelara-the-elven-slave-3155631e',
@@ -190,7 +190,7 @@ export const DEMO_FULL_PATHS: ReadonlyArray<string> = [
     'Exmortis/imra-aegis-vanguard-rescue-savior-version-f9b4102c287a',
     'MoistCrow_/neia-the-elf-267ab661',
     'DoktorB/kuroeda-0036c4f3',
-    'Tearlament7/elf-slave-shana-40b0e01d30d4'
+    'Tearlament7/elf-slave-shana-40b0e01d30d4'*/
 ];
 
 export const getElfPortrait = (type: UnitType, bodyType: BodyType, hairType: HairType): string => {
@@ -474,14 +474,13 @@ export async function loadReserveUnitTemplate(data: any, stage: Stage): Promise<
     const [imagePromptResponse, quotesResponse] = await Promise.all([
         // Generate image prompt based on description. Use the description from above and prompt a bullet-pointed breakdown of key features for a concise image prompt.
         stage.generator.textGen({
-            prompt: `{{messages}}This is a preparatory request for generating an image prompt based on a character description. ` +
-                `The character description is intended to be used for generating a portrait image of a character in a tower-defense strategy game. ` +
-                `The description may include details about the character's physical appearance, attire, and distinguishing features. ` +
-                `Your task is to analyze the provided character description and extract the most critical and concise visual elements. ` +
-                `Focus on identifying obvious elements such as clothing, colors, and accessories. ` +
-                `The output should be a bullet-pointed list of these key visual elements that can guide adjustments to the character's portrait. ` +
+            prompt: `{{messages}}This is a preparatory request for identifying key visual elements based on a character description. ` +
+                `The full physical description may includes details about the character's physical appearance, attire, distinguishing features, and style. ` +
+                `Your task is to analyze this character description and extract the most critical and concise visual elements. ` +
+                `Focus on identifying obvious elements such as clothing items, colors, and accessories, providing a simple buletted breakdown. ` +
                 `Character Physical Description:\n${parsedData['description'] || ''}\n\n` +
-                `List simple, objectively apparent attributes that are a departure from the default description: ${coreDescription}. Typically: skin tone, hair color, eye color, and clothing items.\n` +
+                `List simple, obvious attributes that are a departure from the default description: ${coreDescription}.\n` + 
+                `Typically, the list will only include skin tone, hair color, eye color, and clothing items. Provide only color or other basic adjectives.\n` +
                 `End the list with #END# and then offer explanations for the bulletpoints.\n\n` +
                 `Example Output:\n` +
                 `- Tanned skin\n` +
