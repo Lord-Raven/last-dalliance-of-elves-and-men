@@ -80,7 +80,7 @@ export const UnitCardFace = ({card, theme}: {card: Unit; theme: CardTheme}): Rea
         <div className={'unit-stat-capsule unit-cost-capsule'} style={{
             position: 'absolute',
             top: 12,
-            left: 10,
+            left: '2%',
             display: 'inline-flex',
             alignItems: 'center',
             gap: 3,
@@ -102,7 +102,7 @@ export const UnitCardFace = ({card, theme}: {card: Unit; theme: CardTheme}): Rea
         <div style={{
             position: 'absolute',
             top: 12,
-            right: 10,
+            right: '2%',
             display: 'flex',
             flexDirection: 'column',
             gap: 5,
@@ -132,8 +132,8 @@ export const UnitCardFace = ({card, theme}: {card: Unit; theme: CardTheme}): Rea
         </div>
 
         <div style={{
-            width: '90%',
-            marginLeft: '5%',
+            width: '94%',
+            marginLeft: '3%',
             height: 186,
             borderRadius: 10,
             backgroundImage: `url(${card.portraitUrl})`,

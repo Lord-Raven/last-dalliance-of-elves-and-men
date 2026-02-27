@@ -186,7 +186,8 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
             width: '100vw',
             height: '100vh',
             display: 'grid',
-            alignItems: 'stretch'
+            alignItems: 'stretch',
+            overflow: 'hidden',
         }}>
             <TowerDefenseBoard stage={this} />
         </div>;
